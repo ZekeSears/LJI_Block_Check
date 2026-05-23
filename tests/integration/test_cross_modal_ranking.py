@@ -23,12 +23,24 @@ import phase2_descriptors as p2
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-IMAGES_DIR = REPO_ROOT / "iPhone_test_images"
+
+
+def _resolve_images_dir() -> Path:
+    for name in ("iphone_images", "iPhone_test_images"):
+        candidate = REPO_ROOT / name
+        if candidate.is_dir() and any(candidate.glob("*.jpeg")) or any(
+                candidate.glob("*.jpg")):
+            return candidate
+    return REPO_ROOT / "iphone_images"
+
+
+IMAGES_DIR = _resolve_images_dir()
 
 
 @pytest.mark.skipif(
-    not IMAGES_DIR.is_dir() or not any(IMAGES_DIR.iterdir()),
-    reason="iPhone_test_images/ empty — skipping live-dataset acceptance test.",
+    not IMAGES_DIR.is_dir()
+    or not (any(IMAGES_DIR.glob("*.jpeg")) or any(IMAGES_DIR.glob("*.jpg"))),
+    reason="iphone_images/ (or iPhone_test_images/) has no JPEGs — skipping.",
 )
 def test_lung_cross_modal_top3_ranking(tmp_path):
     """For each lung block, the correct slide ranks in top 3 of its

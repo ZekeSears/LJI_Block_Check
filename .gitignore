@@ -2,7 +2,22 @@
 test_images/
 __pycache__/
 *.pyc
+.pytest_cache/
 venv/
 .env/
 .DS_Store
 Thumbs.db
+
+# Large local image datasets (keep README / naming docs in repo)
+iphone_images/*.jpeg
+iphone_images/*.jpg
+iphone_images.zip
+
+# Regenerable pipeline outputs
+phase1_outputs/
+phase2_outputs/visualizations/
+phase3_outputs/calibration_histograms/
+
+# Optional: active planning drafts (templates stay in .cursor/specs/README.md)
+# .cursor/specs/proposed_plan.md
+# .cursor/specs/pre_mortem.md

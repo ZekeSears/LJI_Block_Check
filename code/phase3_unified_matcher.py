@@ -88,6 +88,11 @@ def unified_compare(
     features_b: Optional[np.ndarray],
     signature_a: Optional[np.ndarray],
     signature_b: Optional[np.ndarray],
+    *,
+    tissue_a: Optional[str] = None,
+    tissue_b: Optional[str] = None,
+    role_a: Optional[str] = None,
+    role_b: Optional[str] = None,
 ) -> UnifiedMatchResult:
     """Route the comparison, invoke the chosen matcher, return result.
 
@@ -99,7 +104,11 @@ def unified_compare(
     branches (carried forward from Phase 2 and from p3c.match_constellations
     respectively). Pre-mortem §5 critical.
     """
-    decision = p3r.route_comparison(contours_a, contours_b)
+    decision = p3r.route_comparison_hybrid(
+        contours_a, contours_b,
+        tissue_a=tissue_a, tissue_b=tissue_b,
+        role_a=role_a, role_b=role_b,
+    )
 
     if decision == "constellation":
         if signature_a is None or signature_b is None:

@@ -1,0 +1,29 @@
+---
+description: LJI histology automation — commands, TDD, and OpenCV constraints
+alwaysApply: true
+---
+
+# LJI Histology Automation — Development Guidelines
+
+## Command reference
+
+- Lint: `python -m flake8 code/`
+- Tests: `pytest tests/`
+
+## Agent operational constraints (anti-bias gate)
+
+- **Mandatory read**: Before file generation or modification for a **new feature**, read `.cursor/specs/proposed_plan.md` and `.cursor/specs/pre_mortem.md`.
+- **Mitigation requirement**: Do not write implementation code until you have stated a file-by-file mitigation strategy in the terminal that addresses every failure mode in the pre-mortem.
+- **Hardware & environment**: Target deterministic execution. Prefer strict memory management, explicit OpenCV matrix release, input shape assertions, and robust hardware I/O error handling over abstract patterns.
+- **TDD**:
+  - Write deterministic unit/integration tests for edge cases and failure modes from the pre-mortem **before** changing **core** source (any function called by another function).
+  - TDD is optional for **leaf** functions (visualizations, printed summaries, diagnostic PNGs, human-review CSVs) if they contain no logic other functions depend on.
+  - If a leaf function gains branching logic or callers, promote it to core and add tests retroactively.
+
+## Project context
+
+For phase status, frozen APIs, and hardware targets, read `.cursor/docs/PROJECT_CONTEXT.md` (or attach `@PROJECT_CONTEXT.md` in a new chat). After closing a phase milestone, update PROJECT_CONTEXT.md Sections 4 and 10 and the “Last updated” date.
+
+## Planning workflow
+
+See `.cursor/docs/planning-workflow.md` for synthesize → critique → implement steps.

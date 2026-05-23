@@ -1,11 +1,17 @@
 # LJI Histology Automation System - Development Guidelines
 
 ## Command Reference
-- Build/Check: `python -m flake8 src/`
+- Build/Check: `python -m flake8 code/`
 - Test Execution: `pytest tests/`
 
+## Cursor (preferred in this IDE)
+- Rules: `.cursor/rules/`
+- Planning workflow: `.cursor/docs/planning-workflow.md`
+- Specs: `.cursor/specs/proposed_plan.md`, `.cursor/specs/pre_mortem.md`
+- See also: `AGENTS.md`
+
 ## Agent Operational Constraints (Anti-Bias Gate)
-- **Mandatory Read**: Before executing any file generation or modification requested for a new feature, you MUST read `.claude/specs/proposed_plan.md` and `.claude/specs/pre_mortem.md`.
+- **Mandatory Read**: Before executing any file generation or modification requested for a new feature, you MUST read the active spec pair: `.cursor/specs/` (Cursor) or `.claude/specs/` (Claude Code).
 - **Mitigation Requirement**: You are strictly prohibited from writing implementation code until you have explicitly generated a file-by-file mitigation strategy in your terminal output addressing every failure mode identified in the pre-mortem.
 - **Hardware & Environment Reality**: This project targets deterministic execution. Prioritize strict memory management, explicit OpenCV matrix deallocations, input shape assertions, and robust error handling for hardware I/O over abstract design patterns.
 - **TDD Requirement**:

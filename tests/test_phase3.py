@@ -296,11 +296,9 @@ def test_router_1_vs_1_always_shape():
 
 
 def test_router_boundary_deterministic():
-    """At exactly the threshold values, routing must be deterministic
-    (no flip-flopping across repeated calls)."""
+    """Repeated hybrid routing calls must agree (deterministic)."""
     import cv2
     theta = np.linspace(0, 2 * np.pi, 80, endpoint=False)
-    # Construct contours whose mean area equals SMALL_FRAGMENT_AREA_PX exactly.
     target_area = p3r.SMALL_FRAGMENT_AREA_PX
     radius = int(np.sqrt(target_area / np.pi))
     contours = []
@@ -310,6 +308,69 @@ def test_router_boundary_deterministic():
         contours.append(np.stack([xs, ys], axis=1).reshape(-1, 1, 2))
     decisions = {p3r.route_comparison(contours, contours) for _ in range(5)}
     assert len(decisions) == 1, f"Non-deterministic routing at boundary: {decisions}"
+
+
+def test_router_hybrid_lung_metadata_prefers_shape_over_constellation(
+        small_multi_fragment_contours):
+    """Lung tissue from filename → shape even when contour count is high."""
+    decision = p3r.route_comparison_hybrid(
+        small_multi_fragment_contours,
+        small_multi_fragment_contours,
+        tissue_a="lung",
+        tissue_b="lung",
+        role_a="slide",
+        role_b="slide",
+    )
+    assert decision == "shape"
+
+
+def test_router_hybrid_esophagus_metadata_prefers_constellation(
+        small_multi_fragment_contours):
+    decision = p3r.route_comparison_hybrid(
+        small_multi_fragment_contours,
+        small_multi_fragment_contours,
+        tissue_a="esophagus",
+        tissue_b="esophagus",
+        role_a="slide",
+        role_b="slide",
+    )
+    assert decision == "constellation"
+
+
+def test_router_hybrid_high_dominance_slide_metrics_prefers_shape():
+    """One dominant blob (high max/total) → shape without tissue metadata."""
+    import cv2
+    theta = np.linspace(0, 2 * np.pi, 120, endpoint=False)
+    big = np.stack([
+        (800 + 200 * np.cos(theta)).round().astype(np.int32),
+        (800 + 200 * np.sin(theta)).round().astype(np.int32),
+    ], axis=1).reshape(-1, 1, 2)
+    speck = np.stack([
+        (200 + 8 * np.cos(theta)).round().astype(np.int32),
+        (200 + 8 * np.sin(theta)).round().astype(np.int32),
+    ], axis=1).reshape(-1, 1, 2)
+    contours = [big, speck]
+    decision = p3r.route_comparison_hybrid(
+        contours, contours, role_a="slide", role_b="slide",
+    )
+    assert decision == "shape"
+
+
+def test_compute_side_metrics_dominance():
+    import cv2
+    theta = np.linspace(0, 2 * np.pi, 80, endpoint=False)
+    big = np.stack([
+        (500 + 100 * np.cos(theta)).round().astype(np.int32),
+        (500 + 100 * np.sin(theta)).round().astype(np.int32),
+    ], axis=1).reshape(-1, 1, 2)
+    small = np.stack([
+        (700 + 10 * np.cos(theta)).round().astype(np.int32),
+        (700 + 10 * np.sin(theta)).round().astype(np.int32),
+    ], axis=1).reshape(-1, 1, 2)
+    m = p3r.compute_side_metrics([big, small])
+    assert m.contour_count == 2
+    assert m.dominance > 0.9
+    assert m.total_tissue_area > 0
 
 
 # ===========================================================================
