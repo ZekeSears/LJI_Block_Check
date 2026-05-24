@@ -7,16 +7,16 @@
 - **Dataset:** `iphone_images/` — iPhone backlit captures, single shooting session
 - **Re-calibration:** Required if images are re-shot or lighting changes materially
 
-## Recommended router thresholds (hybrid v2)
+## Recommended router thresholds (geometry calibration)
 
-Primary routing uses **tissue in filename** when available, then **slide**
-`total_tissue_area` and **dominance** (max contour area / sum of areas).
-Contour-count thresholds are legacy fallback only.
+Primary routing uses **slide** `total_tissue_area` and **dominance** only
+(metrics-only; no filename tissue). Thresholds derive from geometry k=2
+clusters on white-tag HE slides. Contour-count thresholds are legacy fallback.
 
 | Constant | Value | Derivation |
 |----------|-------|------------|
-| `SLIDE_TOTAL_TISSUE_AREA_PX` | 224998 | median_midpoint on slide total tissue area (lung median 301964, esophagus median 148033) |
-| `DOMINANCE_MIN_FOR_SHAPE` | 0.943 | median_midpoint on slide dominance (lung median 0.985, esophagus median 0.900) |
+| `SLIDE_TOTAL_TISSUE_AREA_PX` | 208044 | median_midpoint on slide total tissue area (shape_like median 309841, constellation_like median 106248) |
+| `DOMINANCE_MIN_FOR_SHAPE` | 0.912 | median_midpoint on slide dominance (shape_like median 0.986, constellation_like median 0.839) |
 
 - Contour-count calibration **overlapped** (expected on this dataset); do not use count for primary routing.
 
@@ -26,10 +26,12 @@ Contour-count thresholds are legacy fallback only.
 
 | tissue | role | n | contour_count median | median_area median |
 |--------|------|---|----------------------|---------------------|
-| esophagus | block_silhouette | 7 | 3.0 | 333372 |
-| esophagus | slide | 7 | 4.0 | 6848 |
-| lung | block_silhouette | 14 | 3.0 | 356570 |
-| lung | slide | 14 | 2.0 | 20465 |
+| esophagus | block_silhouette | 19 | 3.0 | 341234 |
+| esophagus | slide | 19 | 2.0 | 6848 |
+| lung | block_silhouette | 5 | 3.0 | 349691 |
+| lung | slide | 5 | 3.0 | 8968 |
+| lungs | block_silhouette | 23 | 3.0 | 383003 |
+| lungs | slide | 23 | 4.0 | 8428 |
 
 ## Yellow-tag (Set 1) separate findings
 
@@ -49,8 +51,3 @@ Only one yellow-tag set exists (Set 1). Add more yellow-tag samples before Phase
 - `phase3_outputs/calibration_histograms/slide_total_tissue_area_by_tissue.png`
 - `phase3_outputs/calibration_histograms/slide_dominance_by_tissue.png`
 - `phase3_outputs/calibration_histograms/contour_count_white_vs_yellow.png`
-
-## Low sample-size warnings
-
-- lung slide calibration pool n=13 (<15); percentiles are unstable.
-- esophagus slide calibration pool n=7 (<15); percentiles are unstable.

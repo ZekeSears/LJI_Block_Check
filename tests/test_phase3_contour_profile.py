@@ -53,6 +53,7 @@ def test_parse_set1_missing_work_order_token():
     meta = p3cp.parse_image_filename(
         "set_01_block_silhouette_lung_MT_TWKOB4"
     )
+    p3cp.enrich_tissue_fields(meta)
     assert meta["parse_ok"] is True
     assert meta["set_id"] == 1
     assert meta["work_order"] == ""
@@ -67,9 +68,38 @@ def test_parse_malformed_unknown_role_prefix():
     assert "unknown role" in meta["parse_error"].lower()
 
 
+def test_normalize_tissue_token_preserves_lungs():
+    assert p3cp.normalize_tissue_token("lungs") == "lungs"
+    assert p3cp.normalize_tissue_token("lung") == "lung"
+    assert p3cp.normalize_tissue_class("lungs") == "lung"
+
+
+def test_enrich_tissue_fields_on_parse():
+    meta = p3cp.parse_image_filename("set_22_slide_lungs_HE_N2_WO7842")
+    p3cp.enrich_tissue_fields(meta)
+    assert meta["tissue_token"] == "lungs"
+    assert meta["tissue_class"] == "lung"
+
+
 def test_label_type_yellow_only_set_one():
     assert p3cp.label_type_for_set(1) == "yellow"
     assert p3cp.label_type_for_set(2) == "white"
+
+
+def test_label_type_mt_slide_is_white_unless_yellow_set():
+    meta = p3cp.parse_image_filename("set_09_slide_lungs_HE_WT2_WO7842")
+    meta["role"] = "slide"
+    meta["stain"] = "MT"
+    assert p3cp.label_type_from_meta(meta) == "white"
+    meta_mt_set1 = p3cp.parse_image_filename("set_01_slide_lung_MT_TWKOB4")
+    p3cp.enrich_tissue_fields(meta_mt_set1)
+    assert meta_mt_set1["label_type"] == "yellow"
+
+
+def test_label_type_he_slide_is_white():
+    meta = p3cp.parse_image_filename("set_09_slide_lung_HE_WT2_WO7842")
+    p3cp.enrich_tissue_fields(meta)
+    assert meta["label_type"] == "white"
 
 
 def test_barcode_role_excluded_from_measurement():

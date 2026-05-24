@@ -4,12 +4,10 @@ phase3_router.py — Hybrid algorithm router (metadata + slide metrics).
 Routes (block, slide) comparisons between Phase 2 shape matching and
 Phase 3 constellation matching.
 
-v2 (2026-05): Contour-count thresholds failed on the 23-set iPhone dataset.
-Routing now prefers:
-  - tissue_class from filename when available (lung → shape bias,
-    esophagus → constellation bias)
-  - slide total_tissue_area and dominance (max_area / total_area) as fallback
-Calibrated via phase3_contour_profile.py → phase3_outputs/router_constants.json
+v3 (2026-05): Routing is **metrics-only** — no filename tissue tokens.
+Uses contour count, slide total_tissue_area, dominance (max/total area),
+and mean contour area vs calibrated thresholds from router_constants.json.
+Tissue names in filenames are for inventory/TPR reporting only.
 """
 
 from __future__ import annotations
@@ -23,9 +21,10 @@ import cv2
 import numpy as np
 
 
-# Provisional defaults; overridden by router_constants.json when present.
+# Module defaults when JSON is missing or overlap_unresolved.
 SLIDE_TOTAL_TISSUE_AREA_PX: float = 225_000.0
 DOMINANCE_MIN_FOR_SHAPE: float = 0.92
+_ROUTER_CONSTANTS_SOURCE: str = "module_defaults"
 
 # Legacy fallback (demoted — contour count overlapped on real data).
 MULTI_FRAGMENT_THRESHOLD: int = 3
@@ -50,20 +49,35 @@ class SideMetrics:
 def _load_router_constants() -> None:
     global SLIDE_TOTAL_TISSUE_AREA_PX, DOMINANCE_MIN_FOR_SHAPE
     global MULTI_FRAGMENT_THRESHOLD, SMALL_FRAGMENT_AREA_PX
+    global _ROUTER_CONSTANTS_SOURCE
+    _ROUTER_CONSTANTS_SOURCE = "module_defaults"
     if not _ROUTER_CONSTANTS_PATH.is_file():
         return
     try:
         data = json.loads(_ROUTER_CONSTANTS_PATH.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return
+    if data.get("status") != "calibrated":
+        return
     if "SLIDE_TOTAL_TISSUE_AREA_PX" in data:
         SLIDE_TOTAL_TISSUE_AREA_PX = float(data["SLIDE_TOTAL_TISSUE_AREA_PX"])
     if "DOMINANCE_MIN_FOR_SHAPE" in data:
         DOMINANCE_MIN_FOR_SHAPE = float(data["DOMINANCE_MIN_FOR_SHAPE"])
-    if "MULTI_FRAGMENT_THRESHOLD" in data:
+    if data.get("MULTI_FRAGMENT_THRESHOLD") is not None:
         MULTI_FRAGMENT_THRESHOLD = int(data["MULTI_FRAGMENT_THRESHOLD"])
-    if "SMALL_FRAGMENT_AREA_PX" in data:
+    if data.get("SMALL_FRAGMENT_AREA_PX") is not None:
         SMALL_FRAGMENT_AREA_PX = float(data["SMALL_FRAGMENT_AREA_PX"])
+    _ROUTER_CONSTANTS_SOURCE = "router_constants.json"
+
+
+def reload_router_constants() -> None:
+    """Re-read router_constants.json (tests / post-calibration subprocess)."""
+    _load_router_constants()
+
+
+def router_constants_source() -> str:
+    """Provenance: module_defaults vs calibrated JSON."""
+    return _ROUTER_CONSTANTS_SOURCE
 
 
 _load_router_constants()
@@ -90,10 +104,7 @@ def side_prefers_shape(
         metrics: SideMetrics,
         role: Optional[str] = None,
 ) -> bool:
-    if tissue_class == "lung":
-        return True
-    if tissue_class == "esophagus":
-        return False
+    del tissue_class  # unused — routing must not depend on filename tissue
     if metrics.contour_count == 0:
         return False
     use_slide_metrics = role in (None, "slide")
@@ -112,10 +123,7 @@ def side_prefers_constellation(
         metrics: SideMetrics,
         role: Optional[str] = None,
 ) -> bool:
-    if tissue_class == "esophagus":
-        return True
-    if tissue_class == "lung":
-        return False
+    del tissue_class  # unused — routing must not depend on filename tissue
     if metrics.contour_count < 2:
         return False
     use_slide_metrics = role in (None, "slide")
@@ -138,7 +146,7 @@ def route_comparison_hybrid(
         role_a: Optional[str] = None,
         role_b: Optional[str] = None,
 ) -> RoutingDecision:
-    """Hybrid router: metadata when known, slide area/dominance as fallback."""
+    """Hybrid router: contour metrics and calibrated area/dominance thresholds only."""
     n_a, n_b = len(contours_a), len(contours_b)
     if n_a == 1 and n_b == 1:
         return "shape"
@@ -188,4 +196,6 @@ __all__ = [
     "side_prefers_constellation",
     "route_comparison",
     "route_comparison_hybrid",
+    "reload_router_constants",
+    "router_constants_source",
 ]

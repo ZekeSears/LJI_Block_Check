@@ -310,10 +310,16 @@ def test_router_boundary_deterministic():
     assert len(decisions) == 1, f"Non-deterministic routing at boundary: {decisions}"
 
 
-def test_router_hybrid_lung_metadata_prefers_shape_over_constellation(
+def test_router_ignores_tissue_metadata_on_fragments(
         small_multi_fragment_contours):
-    """Lung tissue from filename → shape even when contour count is high."""
-    decision = p3r.route_comparison_hybrid(
+    """Multi-fragment slides route by metrics; filename tissue must not override."""
+    base = p3r.route_comparison_hybrid(
+        small_multi_fragment_contours,
+        small_multi_fragment_contours,
+        role_a="slide",
+        role_b="slide",
+    )
+    with_lung = p3r.route_comparison_hybrid(
         small_multi_fragment_contours,
         small_multi_fragment_contours,
         tissue_a="lung",
@@ -321,12 +327,7 @@ def test_router_hybrid_lung_metadata_prefers_shape_over_constellation(
         role_a="slide",
         role_b="slide",
     )
-    assert decision == "shape"
-
-
-def test_router_hybrid_esophagus_metadata_prefers_constellation(
-        small_multi_fragment_contours):
-    decision = p3r.route_comparison_hybrid(
+    with_eso = p3r.route_comparison_hybrid(
         small_multi_fragment_contours,
         small_multi_fragment_contours,
         tissue_a="esophagus",
@@ -334,7 +335,7 @@ def test_router_hybrid_esophagus_metadata_prefers_constellation(
         role_a="slide",
         role_b="slide",
     )
-    assert decision == "constellation"
+    assert base == with_lung == with_eso == "constellation"
 
 
 def test_router_hybrid_high_dominance_slide_metrics_prefers_shape():

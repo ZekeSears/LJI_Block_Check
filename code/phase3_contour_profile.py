@@ -32,7 +32,7 @@ from phase2_descriptors import clean_mask
 
 log = logging.getLogger(__name__)
 
-# Phase 4 should encode label color in filenames; until then, maintain here.
+# Legacy manual override; normal path uses slide stain (MT → yellow APEX SAS).
 YELLOW_TAG_SET_IDS: frozenset[int] = frozenset({1})
 
 INPUT_DIR = Path("./iphone_images/")
@@ -70,6 +70,13 @@ def label_type_for_set(set_id: int) -> str:
     return "yellow" if set_id in YELLOW_TAG_SET_IDS else "white"
 
 
+def label_type_from_meta(meta: dict[str, Any]) -> str:
+    """Yellow APEX SAS adhesive — only known set IDs (e.g. set 1), not all MT stains."""
+    if meta.get("set_id") in YELLOW_TAG_SET_IDS:
+        return "yellow"
+    return "white"
+
+
 def parse_image_filename(stem: str) -> dict[str, Any]:
     """Parse set_NN_<role>... filename stem into metadata.
 
@@ -104,7 +111,7 @@ def parse_image_filename(stem: str) -> dict[str, Any]:
         return base
 
     base["set_id"] = set_id
-    base["label_type"] = label_type_for_set(set_id)
+    base["label_type"] = "white"  # refined in enrich_tissue_fields after role known
 
     role_token = tokens[2]
     if role_token == "block":
@@ -138,15 +145,40 @@ def parse_image_filename(stem: str) -> dict[str, Any]:
     return base
 
 
-def normalize_tissue_class(tissue: str) -> Optional[str]:
-    t = tissue.lower()
-    if "lung" in t or t == "lungs":
-        return "lung"
+def normalize_tissue_token(tissue: str) -> Optional[str]:
+    """Raw tissue token from filename: lung, lungs, or esophagus (distinct)."""
+    t = tissue.strip().lower()
+    if t in ("lung", "lungs", "esophagus"):
+        return t
     if "esoph" in t:
         return "esophagus"
-    if t == "":
+    return None
+
+
+def normalize_tissue_class(tissue: str) -> Optional[str]:
+    """Collapsed class for router bias only (lungs → lung)."""
+    token = normalize_tissue_token(tissue)
+    if token in ("lung", "lungs"):
+        return "lung"
+    if token == "esophagus":
+        return "esophagus"
+    if tissue.strip() == "":
         return None
     return None
+
+
+def enrich_tissue_fields(meta: dict[str, Any]) -> None:
+    """Attach tissue_token, tissue_class (reporting), and label_type (calibration)."""
+    raw = meta.get("tissue", "")
+    meta["tissue_token"] = normalize_tissue_token(raw)
+    meta["tissue_class"] = normalize_tissue_class(raw)
+    if meta.get("parse_ok"):
+        meta["label_type"] = label_type_from_meta(meta)
+
+
+def list_jpeg_paths(input_dir: Path) -> list[Path]:
+    """Case-insensitive JPEG glob (matches phase3_pipeline)."""
+    return sorted(Path(input_dir).glob("*.jp*g"))
 
 
 def should_measure_contours(meta: dict[str, Any]) -> bool:
@@ -195,7 +227,7 @@ def group_measurement_records(
 ) -> dict[tuple[str, str], list[dict[str, Any]]]:
     groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for rec in records:
-        tissue = rec.get("tissue_class")
+        tissue = rec.get("tissue_token") or rec.get("tissue_class")
         role = rec.get("role")
         if tissue and role:
             groups[(tissue, role)].append(rec)
@@ -248,6 +280,121 @@ def derive_count_threshold(
     else:
         result["overlap"] = True
     return result
+
+
+def _normalize_2d_column(values: np.ndarray) -> np.ndarray:
+    if values.size < 2 or float(np.std(values)) == 0.0:
+        return np.zeros_like(values, dtype=np.float64)
+    return (values - np.mean(values)) / np.std(values)
+
+
+def _kmeans_two_clusters(
+        features: np.ndarray,
+        raw_areas: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Deterministic 2-means on (n, 2) features; init at min/max raw area index."""
+    n = features.shape[0]
+    c0, c1 = int(np.argmin(raw_areas)), int(np.argmax(raw_areas))
+    if c0 == c1:
+        c1 = (c0 + 1) % n
+    centroids = features[[c0, c1]].astype(np.float64).copy()
+    labels = np.zeros(n, dtype=np.int32)
+    for _ in range(50):
+        dists = np.linalg.norm(
+            features[:, None, :] - centroids[None, :, :],
+            axis=2,
+        )
+        labels = np.argmin(dists, axis=1).astype(np.int32)
+        new_centroids = np.zeros((2, 2), dtype=np.float64)
+        for k in range(2):
+            mask = labels == k
+            if mask.any():
+                new_centroids[k] = features[mask].mean(axis=0)
+            else:
+                new_centroids[k] = centroids[k]
+        if np.allclose(new_centroids, centroids):
+            break
+        centroids = new_centroids
+    return labels, centroids
+
+
+def derive_geometry_router_thresholds(
+        pool: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Geometry-only calibration: k=2 on slide (area, dominance), no tissue labels."""
+    empty: dict[str, Any] = {
+        "overlap": True,
+        "slide_area_result": {"overlap": True, "threshold": None},
+        "dominance_result": {"overlap": True, "threshold": None},
+        "geometry": {"method": "geometry_k2", "shape_like_n": 0, "constellation_like_n": 0},
+    }
+    slides = [
+        r for r in pool
+        if r.get("role") == "slide"
+        and r.get("eligible_for_threshold")
+        and r.get("measurement_exclusion") is None
+    ]
+    if len(slides) < 4:
+        return empty
+
+    areas = np.array([float(r["total_tissue_area"]) for r in slides], dtype=np.float64)
+    doms = np.array(
+        [float(r["dominance"]) for r in slides],
+        dtype=np.float64,
+    )
+    if np.any(np.isnan(doms)):
+        return empty
+
+    features = np.column_stack([
+        _normalize_2d_column(areas),
+        _normalize_2d_column(doms),
+    ])
+    labels, _centroids = _kmeans_two_clusters(features, areas)
+
+    cluster0 = [slides[i] for i in range(len(slides)) if labels[i] == 0]
+    cluster1 = [slides[i] for i in range(len(slides)) if labels[i] == 1]
+    if len(cluster0) < 2 or len(cluster1) < 2:
+        return empty
+
+    def _median_area(cluster: list[dict[str, Any]]) -> float:
+        return float(np.median([float(r["total_tissue_area"]) for r in cluster]))
+
+    def _median_dom(cluster: list[dict[str, Any]]) -> float:
+        return float(np.median([float(r["dominance"]) for r in cluster]))
+
+    if _median_area(cluster0) >= _median_area(cluster1):
+        shape_like, constellation_like = cluster0, cluster1
+    elif _median_area(cluster1) > _median_area(cluster0):
+        shape_like, constellation_like = cluster1, cluster0
+    elif _median_dom(cluster0) >= _median_dom(cluster1):
+        shape_like, constellation_like = cluster0, cluster1
+    else:
+        shape_like, constellation_like = cluster1, cluster0
+
+    shape_areas = [float(r["total_tissue_area"]) for r in shape_like]
+    const_areas = [float(r["total_tissue_area"]) for r in constellation_like]
+    shape_dom = [float(r["dominance"]) for r in shape_like]
+    const_dom = [float(r["dominance"]) for r in constellation_like]
+
+    slide_area_result = derive_high_low_separation_threshold(shape_areas, const_areas)
+    dominance_result = derive_high_low_separation_threshold(shape_dom, const_dom)
+    hybrid_overlap = (
+        slide_area_result.get("overlap")
+        or dominance_result.get("overlap")
+    )
+
+    return {
+        "overlap": hybrid_overlap,
+        "slide_area_result": slide_area_result,
+        "dominance_result": dominance_result,
+        "geometry": {
+            "method": "geometry_k2",
+            "shape_like_n": len(shape_like),
+            "constellation_like_n": len(constellation_like),
+            "shape_like_area_median": _median_area(shape_like),
+            "constellation_like_area_median": _median_area(constellation_like),
+        },
+    }
 
 
 def derive_high_low_separation_threshold(
@@ -412,7 +559,8 @@ def _write_histograms(df: pd.DataFrame, out_dir: Path) -> list[Path]:
 
     def _hist(column: str, title: str, fname: str) -> None:
         fig, ax = plt.subplots(figsize=(8, 5))
-        for tissue, sub in measured.groupby("tissue_class"):
+        group_col = "tissue_token" if "tissue_token" in measured.columns else "tissue_class"
+        for tissue, sub in measured.groupby(group_col):
             if sub[column].notna().any():
                 ax.hist(sub[column].dropna(), bins=15, alpha=0.5, label=tissue)
         ax.set_title(title)
@@ -426,7 +574,8 @@ def _write_histograms(df: pd.DataFrame, out_dir: Path) -> list[Path]:
 
     def _hist_slide(column: str, title: str, fname: str) -> None:
         fig, ax = plt.subplots(figsize=(8, 5))
-        for tissue, sub in slides.groupby("tissue_class"):
+        group_col = "tissue_token" if "tissue_token" in slides.columns else "tissue_class"
+        for tissue, sub in slides.groupby(group_col):
             if sub[column].notna().any():
                 ax.hist(sub[column].dropna(), bins=15, alpha=0.5, label=tissue)
         ax.set_title(title)
@@ -473,22 +622,66 @@ def _format_stats_table(groups: dict[tuple[str, str], list[dict[str, Any]]]) -> 
     return "\n".join(lines)
 
 
+def write_router_constants_calibrated(
+        slide_area_result: dict[str, Any],
+        dominance_result: dict[str, Any],
+        count_result: dict[str, Any],
+        area_result: dict[str, Any],
+        *,
+        geometry: Optional[dict[str, Any]] = None,
+) -> None:
+    from datetime import datetime, timezone
+
+    payload: dict[str, Any] = {
+        "status": "calibrated",
+        "calibration_exit": 0,
+        "calibrated_at": datetime.now(timezone.utc).isoformat(),
+        "routing_strategy": "hybrid_geometry",
+        "derivation": "geometry_k2",
+        "SLIDE_TOTAL_TISSUE_AREA_PX": slide_area_result.get("threshold"),
+        "DOMINANCE_MIN_FOR_SHAPE": dominance_result.get("threshold"),
+        "MULTI_FRAGMENT_THRESHOLD": count_result.get("threshold"),
+        "SMALL_FRAGMENT_AREA_PX": area_result.get("threshold"),
+    }
+    if geometry:
+        payload["geometry"] = geometry
+    ROUTER_CONSTANTS_PATH.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_router_constants_overlap_stub(
+        *,
+        overlap_reasons: list[str],
+        geometry: Optional[dict[str, Any]] = None,
+) -> None:
+    from datetime import datetime, timezone
+
+    payload: dict[str, Any] = {
+        "status": "overlap_unresolved",
+        "calibration_exit": 1,
+        "written_at": datetime.now(timezone.utc).isoformat(),
+        "routing_strategy": "hybrid_geometry",
+        "overlap_reasons": overlap_reasons,
+    }
+    if geometry:
+        payload["geometry"] = geometry
+    ROUTER_CONSTANTS_PATH.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write_router_constants_json(
         slide_area_result: dict[str, Any],
         dominance_result: dict[str, Any],
         count_result: dict[str, Any],
         area_result: dict[str, Any],
 ) -> None:
-    payload: dict[str, Any] = {
-        "routing_strategy": "hybrid_v2",
-        "SLIDE_TOTAL_TISSUE_AREA_PX": slide_area_result.get("threshold"),
-        "DOMINANCE_MIN_FOR_SHAPE": dominance_result.get("threshold"),
-        "MULTI_FRAGMENT_THRESHOLD": count_result.get("threshold"),
-        "SMALL_FRAGMENT_AREA_PX": area_result.get("threshold"),
-    }
-    ROUTER_CONSTANTS_PATH.write_text(
-        json.dumps(payload, indent=2) + "\n",
-        encoding="utf-8",
+    """Backward-compatible alias — writes calibrated payload."""
+    write_router_constants_calibrated(
+        slide_area_result, dominance_result, count_result, area_result,
     )
 
 
@@ -517,11 +710,11 @@ def write_calibration_notes(
         "- **Dataset:** `iphone_images/` — iPhone backlit captures, single shooting session",
         "- **Re-calibration:** Required if images are re-shot or lighting changes materially",
         "",
-        "## Recommended router thresholds (hybrid v2)",
+        "## Recommended router thresholds (geometry calibration)",
         "",
-        "Primary routing uses **tissue in filename** when available, then **slide**",
-        "`total_tissue_area` and **dominance** (max contour area / sum of areas).",
-        "Contour-count thresholds are legacy fallback only.",
+        "Primary routing uses **slide** `total_tissue_area` and **dominance** only",
+        "(metrics-only; no filename tissue). Thresholds derive from geometry k=2",
+        "clusters on white-tag HE slides. Contour-count thresholds are legacy fallback.",
         "",
     ]
     hybrid_overlap = (
@@ -540,13 +733,13 @@ def write_calibration_notes(
             f"| `SLIDE_TOTAL_TISSUE_AREA_PX` | "
             f"{slide_area_result.get('threshold'):.0f} | "
             f"{slide_area_result.get('method')} on slide total tissue area "
-            f"(lung median {slide_area_result.get('lung_median'):.0f}, "
-            f"esophagus median {slide_area_result.get('esophagus_median'):.0f}) |",
+            f"(shape_like median {slide_area_result.get('lung_median'):.0f}, "
+            f"constellation_like median {slide_area_result.get('esophagus_median'):.0f}) |",
             f"| `DOMINANCE_MIN_FOR_SHAPE` | "
             f"{dominance_result.get('threshold'):.3f} | "
             f"{dominance_result.get('method')} on slide dominance "
-            f"(lung median {dominance_result.get('lung_median'):.3f}, "
-            f"esophagus median {dominance_result.get('esophagus_median'):.3f}) |",
+            f"(shape_like median {dominance_result.get('lung_median'):.3f}, "
+            f"constellation_like median {dominance_result.get('esophagus_median'):.3f}) |",
             "",
         ])
     if count_result.get("overlap"):
@@ -614,11 +807,12 @@ def run_calibration(input_dir: Path = INPUT_DIR,
 
     parse_warnings: list[str] = []
     records: list[dict[str, Any]] = []
-    image_paths = sorted(input_dir.glob("*.jpeg")) + sorted(input_dir.glob("*.jpg"))
+    image_paths = list_jpeg_paths(input_dir)
 
     for path in image_paths:
         meta = parse_image_filename(path.stem)
         meta["filename"] = path.name
+        enrich_tissue_fields(meta)
         if not meta["parse_ok"]:
             parse_warnings.append(f"{path.name}: {meta['parse_error']}")
             records.append(meta)
@@ -637,11 +831,13 @@ def run_calibration(input_dir: Path = INPUT_DIR,
             records.append(meta)
             continue
 
-        meta["tissue_class"] = normalize_tissue_class(meta["tissue"])
         metrics = measure_contours_on_image(bgr, meta)
         meta.update(metrics)
         meta["measured"] = True
-        meta["eligible_for_threshold"] = meta["label_type"] == "white"
+        # White-tag **slides** only — calibrate thresholds on PERMASLIDE HE slides.
+        meta["eligible_for_threshold"] = (
+            meta.get("role") == "slide" and meta.get("label_type") == "white"
+        )
         records.append(meta)
         del bgr
 
@@ -649,28 +845,16 @@ def run_calibration(input_dir: Path = INPUT_DIR,
     df.to_csv(CSV_PATH, index=False, quoting=csv.QUOTE_MINIMAL)
 
     pool = white_tag_threshold_records(records)
-    lung = [r for r in pool if r.get("tissue_class") == "lung"]
-    esoph = [r for r in pool if r.get("tissue_class") == "esophagus"]
-    lung_slides = [r for r in lung if r.get("role") == "slide"]
-    esp_slides = [r for r in esoph if r.get("role") == "slide"]
+    geo = derive_geometry_router_thresholds(pool)
+    slide_area_result = geo["slide_area_result"]
+    dominance_result = geo["dominance_result"]
+    hybrid_overlap = geo["overlap"]
+    geometry_meta = geo.get("geometry", {})
 
-    lung_slide_areas = [float(r["total_tissue_area"]) for r in lung_slides]
-    esp_slide_areas = [float(r["total_tissue_area"]) for r in esp_slides]
-    lung_slide_dom = [float(r["dominance"]) for r in lung_slides
-                      if not np.isnan(r.get("dominance", float("nan")))]
-    esp_slide_dom = [float(r["dominance"]) for r in esp_slides
-                     if not np.isnan(r.get("dominance", float("nan")))]
-
-    slide_area_result = derive_high_low_separation_threshold(
-        lung_slide_areas, esp_slide_areas,
-    )
-    dominance_result = derive_high_low_separation_threshold(
-        lung_slide_dom, esp_slide_dom,
-    )
-    hybrid_overlap = (
-        slide_area_result.get("overlap") or dominance_result.get("overlap")
-    )
-
+    # Legacy count/mean-area fallback (tissue pools for reporting only).
+    measured_pool = [r for r in records if r.get("measured")]
+    lung = [r for r in measured_pool if r.get("tissue_class") == "lung"]
+    esoph = [r for r in measured_pool if r.get("tissue_class") == "esophagus"]
     lung_counts = [float(r["contour_count"]) for r in lung]
     esp_counts = [float(r["contour_count"]) for r in esoph]
     lung_areas = [float(r["median_contour_area"]) for r in lung
@@ -685,13 +869,16 @@ def run_calibration(input_dir: Path = INPUT_DIR,
         dominance_result.get("threshold"),
     )
 
+    cal_slides = [
+        r for r in pool
+        if r.get("role") == "slide" and r.get("measurement_exclusion") is None
+    ]
     low_n: list[str] = []
-    for label, subset in (("lung slide", lung_slides), ("esophagus slide", esp_slides)):
-        if 0 < len(subset) < MIN_SAMPLES_FOR_CONFIDENT_PERCENTILES:
-            low_n.append(
-                f"{label} calibration pool n={len(subset)} "
-                f"(<{MIN_SAMPLES_FOR_CONFIDENT_PERCENTILES}); percentiles are unstable."
-            )
+    if 0 < len(cal_slides) < MIN_SAMPLES_FOR_CONFIDENT_PERCENTILES:
+        low_n.append(
+            f"Geometry calibration pool n={len(cal_slides)} slides "
+            f"(<{MIN_SAMPLES_FOR_CONFIDENT_PERCENTILES}); percentiles are unstable."
+        )
 
     groups = group_measurement_records(
         [r for r in records if r.get("measured")],
@@ -699,9 +886,23 @@ def run_calibration(input_dir: Path = INPUT_DIR,
     yellow_records = [r for r in records if r.get("label_type") == "yellow" and r.get("measured")]
 
     hist_paths = _write_histograms(df, HISTOGRAM_DIR)
+    overlap_reasons: list[str] = []
+    if slide_area_result.get("overlap"):
+        overlap_reasons.append("slide_total_tissue_area")
+    if dominance_result.get("overlap"):
+        overlap_reasons.append("dominance")
     if not hybrid_overlap:
-        write_router_constants_json(
-            slide_area_result, dominance_result, count_result, area_result,
+        write_router_constants_calibrated(
+            slide_area_result,
+            dominance_result,
+            count_result,
+            area_result,
+            geometry=geometry_meta,
+        )
+    else:
+        write_router_constants_overlap_stub(
+            overlap_reasons=overlap_reasons or ["geometry_clusters"],
+            geometry=geometry_meta,
         )
     write_calibration_notes(
         slide_area_result=slide_area_result,

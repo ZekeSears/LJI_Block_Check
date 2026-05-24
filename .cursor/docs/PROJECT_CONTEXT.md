@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT.md — LJI Histology Block-Check Pipeline
 
-> **Last updated:** 2026-05-23
+> **Last updated:** 2026-05-24
 > **Purpose:** Attach this file to every new Cursor chat with `@PROJECT_CONTEXT.md`.
 > It replaces the need to re-explain the project from scratch each session.
 > Update it when a phase closes or a major decision changes.
@@ -37,7 +37,7 @@ The full system has four capabilities. Each is a separate development track:
 |---|---|---|
 | A. Motion-triggered capture (frame differencing) | ⏳ Not yet built | TBD — Phase 5+ |
 | B. ID parsing (DataMatrix on blocks, QR on slides) | ✅ Built, unit-tested | `code/phase35_id_parsing.py` |
-| C. Shape/constellation matching | ✅ Built, unit-tested, integration pending | `code/phase2_descriptors.py`, `code/phase3_*.py` |
+| C. Shape/constellation matching | ✅ Built, unit-tested; Phase 3 E2E wired | `code/phase2_descriptors.py`, `code/phase3_*.py`, `code/phase3_pipeline.py` |
 | D. Stain verification (HSV color analysis) | ⏳ Not yet built | Phase 4 |
 
 ---
@@ -79,18 +79,24 @@ matches are logged silently.
 
 ### Phase 3 — Constellation Matching + Label Detection + ID Parsing
 **Sub-status:**
-- ✅ All modules implemented; unit tests include `test_phase3_contour_profile.py`
-- ✅ `phase3_contour_profile.py` run on `iphone_images/` (68 files, 46 measured)
-- ✅ Hybrid router v2: tissue metadata + slide `total_tissue_area` + dominance (see calibration notes)
-- ⏳ Integration test run on `iphone_images/`: Phase **2** cross-modal lung top-3 TPR **33%** (1/3 evaluable) — below 80% gate; uses `phase2_descriptors.run_pipeline`, not Phase 3 unified matcher yet
-- ⏳ Phase 3 closeout blocked until integration/ranking investigated with mentor
+- ✅ All modules implemented; unit + geometry calibration tests (`test_phase3_geometry_calibration.py`, `test_phase3_router_constants.py`)
+- ✅ `phase3_contour_profile.py` on `iphone_images/` (140 files, 94 measured); geometry k=2 calibration **exit 0**
+- ✅ **Metrics-only router** — no filename tissue in routing; tissue tokens for TPR reporting only
+- ✅ End-to-end: `phase3_pipeline.py` → 47×46 matrix; yellow-tag label mask wired (`set_01` still degenerate — re-shoot candidate)
+- ✅ Option B closeout: `closeout_summary.md`, `ranking_failure_notes.md`; integration structural tests pass; 80% gate **xfail** by design
+- ⏳ Mentor sign-off on parallel Phase 4 (draft: `phase3_outputs/mentor_closeout_email_draft.md`)
 
-**Router v2 (2026-05-23):** Contour-count thresholds **overlapped** on the iPhone dataset (lung and esophagus both ~3 blobs). Primary routing now uses:
-1. `tissue_class` from filename when parsed (`lung` → shape bias, `esophagus` → constellation bias)
-2. Slide-only calibrated `SLIDE_TOTAL_TISSUE_AREA_PX` and `DOMINANCE_MIN_FOR_SHAPE` (max area / total area)
-3. Legacy count/mean-area fallback only
+**47-set TPR (2026-05-24, metrics-only router, set_41 excluded from denominator):**
 
-Constants are written to `phase3_outputs/router_constants.json` and loaded by `phase3_router.py` at import.
+| Tissue | TPR |
+|--------|-----|
+| lung (4) | 0% |
+| lungs (23) | 13% |
+| esophagus (18) | 5.6% |
+
+**Router (geometry calibration):** k=2 clusters on slide `(total_tissue_area, dominance)` → thresholds. `router_constants.json` requires `"status": "calibrated"` or router uses module defaults (225k px / 0.92). On overlap, stub `overlap_unresolved` is written instead of stale numerics.
+
+**Yellow-tag policy:** Only `YELLOW_TAG_SET_IDS` (set 1) → yellow; MT white PERMASLIDE slides stay in calibration pool.
 
 **What is built:**
 
@@ -101,6 +107,7 @@ Constants are written to `phase3_outputs/router_constants.json` and loaded by `p
 | `code/phase3_router.py` | Hybrid routing + explicit `shape_partial` for 1-vs-N |
 | `code/phase3_unified_matcher.py` | Per-branch z-score, routing_uncertain flag; passes tissue/role to router |
 | `code/phase3_contour_profile.py` | Calibration script → CSV, histograms, notes, router_constants.json |
+| `code/phase3_pipeline.py` | E2E cross-modal matrix via `unified_compare`, grouped by `set_NN` |
 | `code/phase35_id_parsing.py` | DataMatrix + QR decoding with rotation/CLAHE fallback |
 | `code/phase35_setup_check.py` | Pre-flight platform DLL verification (Windows/macOS/Linux) |
 
@@ -113,12 +120,9 @@ Constants are written to `phase3_outputs/router_constants.json` and loaded by `p
 | `phase3_calibration_notes.md` | Human-readable threshold derivation |
 | `router_constants.json` | Machine-readable constants for the router |
 
-**What Phase 3 closeout requires (DO THIS BEFORE PHASE 4):**
-1. Re-run calibration after router changes: `python code/phase3_contour_profile.py`
-2. Confirm `router_constants.json` exists and hybrid sanity check passes
-3. Run integration test: `pytest tests/integration/ -v`
-4. Confirm esophagus TPR ≥ 80%, lung TPR no regression from Phase 2
-5. Run regression: `pytest tests/test_phase1.py tests/test_phase2.py tests/test_phase3.py tests/test_phase3_contour_profile.py -v`
+**Phase 3 closeout artifacts:** `phase3_outputs/closeout_summary.md`, `ranking_failure_notes.md`, `router_constants.json` (provenance-gated), `pipeline_run/cross_modal_similarity.csv`.
+
+**Phase 4 entry (plan v2):** Start HSV implementation only if mentor approves parallel work **or** lungs TPR ≥ 23% **or** stain-only spike approved. See `phase3_outputs/mentor_closeout_email_draft.md`.
 
 ### Phase 4 — End-to-End Integration ⏳ NOT YET STARTED
 Goals: HSV stain verification, two-phase batch workflow orchestration, exception report
@@ -291,17 +295,14 @@ LJI_blockcheck/
 
 ## 10. What Comes Next
 
-### Immediate — Phase 3 Closeout (do before any Phase 4 work)
+### Immediate — Phase 3 Closeout (Option B complete; mentor gate for Phase 4)
 
-1. Run calibration: `python code/phase3_contour_profile.py` — confirm exit code 0 and `router_constants.json` written
-2. Run integration test: `pytest tests/integration/ -v` (uses `iphone_images/`)
-3. Confirm: esophagus TPR ≥ 80%, lung TPR ≥ Phase 2 result (no regression)
-4. Run regression: `pytest tests/test_phase1.py tests/test_phase2.py tests/test_phase3.py tests/test_phase3_contour_profile.py -v`
-5. Update this file (Section 4 + 10) after integration results
+1. Send mentor email draft: `phase3_outputs/mentor_closeout_email_draft.md`
+2. Re-run after data fixes: `python code/phase3_contour_profile.py` → `python code/phase3_pipeline.py` → `python code/closeout_report.py`
+3. Regression: `pytest tests/ -v` · structural integration: `pytest tests/integration/test_phase3_cross_modal_ranking.py::test_phase3_pipeline_set_keyed_matrix -v`
+4. **Do not start Phase 4 HSV** until mentor gate A/B/C in plan v2
 
-**Note:** Contour-count calibration overlapped; hybrid slide area/dominance thresholds replaced count as the primary gate. Do not proceed to Phase 4 until integration acceptance passes.
-
-### Phase 4 — End-to-End Integration (after Phase 3 validated)
+### Phase 4 — End-to-End Integration (gated)
 
 Goals:
 - **HSV stain verification** — confirm slide color matches QR-claimed stain type (HE=pink/purple, MT=blue)

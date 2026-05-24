@@ -1,7 +1,18 @@
 {
-  "routing_strategy": "hybrid_v2",
-  "SLIDE_TOTAL_TISSUE_AREA_PX": 224998.5,
-  "DOMINANCE_MIN_FOR_SHAPE": 0.9425792589697674,
+  "status": "calibrated",
+  "calibration_exit": 0,
+  "calibrated_at": "2026-05-24T03:44:05.071256+00:00",
+  "routing_strategy": "hybrid_geometry",
+  "derivation": "geometry_k2",
+  "SLIDE_TOTAL_TISSUE_AREA_PX": 208044.125,
+  "DOMINANCE_MIN_FOR_SHAPE": 0.912442423781032,
   "MULTI_FRAGMENT_THRESHOLD": null,
-  "SMALL_FRAGMENT_AREA_PX": null
+  "SMALL_FRAGMENT_AREA_PX": null,
+  "geometry": {
+    "method": "geometry_k2",
+    "shape_like_n": 16,
+    "constellation_like_n": 30,
+    "shape_like_area_median": 309840.75,
+    "constellation_like_area_median": 106247.5
+  }
 }

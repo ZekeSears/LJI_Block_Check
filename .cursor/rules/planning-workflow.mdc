@@ -1,0 +1,13 @@
+---
+description: Quality-gate planning workflow — session synthesizer, pre-mortem critic, plan v2, then implement. Autoloads specs.
+alwaysApply: true
+---
+- **Standard Pipeline**: Brainstorm -> [1] Session Synthesizer (`proposed_plan.md` v1) -> [2] Pre-Mortem Critic (`pre_mortem.md`) -> [3] Revision (`proposed_plan.md` v2) -> [4] Implement. Do not skip stages unless explicitly ordered without spec.
+- **Plan v2 Criteria**: Resolve all 🔴CRITICAL and agreed 🟡MODERATE items from `pre_mortem.md` with explicit architectural or logical mitigations before execution.
+  - **Parallelization Mapping**: When generating or revising a plan to v2, explicitly analyze execution steps for parallel readiness. If tasks are independent (e.g., separate files, distinct tests), append a structural `### Asynchronous Execution Macro` section at the **very bottom** of `proposed_plan.md`. Inside that section, provide the exact syntax-ready `/multitask` command the user can copy-paste into the Agent window to launch the parallel subagent fleet immediately.
+- **Mandatory Context Autoloading**:
+  - `session-synthesizer`: Must auto-read `.cursor/docs/PROJECT_CONTEXT.md` (fallback: `docs/PROJECT_CONTEXT.md`) before writing code or plans. Do not prompt user.
+  - `pre-mortem-critic`: Must auto-read context and `proposed_plan.md`. Output must append **§7 Clarifications required before plan v2** for human/mentor blockers (or explicitly state "No user clarification required before plan v2").
+- **Stage 3 Gate (v2 Revision)**: Read `pre_mortem.md` §7. If human-blocking inputs exist, halt and output numbered questions. If unblocked, summarize findings (positives, top risks, checklist) and target modifications for user verification, then output plan v2. Do not pause for file processing, test execution, or 🟡 items with safe defaults.
+- **Stage 4 Implementation**: Read v2 plan and pre-mortem -> Print file-by-file mitigations in terminal -> Write edge-case tests -> Write feature code.
+- **Paths**: Context: `.cursor/docs/PROJECT_CONTEXT.md` | Plan: `.cursor/specs/proposed_plan.md` | Pre-mortem: `.cursor/specs/pre_mortem.md` (Legacy fallback: `.claude/specs/`, `docs/`). Personal skills live in `~/.cursor/skills/`.

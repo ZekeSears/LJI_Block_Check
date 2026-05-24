@@ -32,5 +32,11 @@ All are work order 7842, stain 01_HE (H&E):
 4. **Mounting artifacts** (bubbles, wrinkles, Swiss-roll-shaped artifacts in IMG_3087) need to be tolerated by the algorithm.
 5. **Stain colors visible under backlight:** HE = pink/purple, MT = blue. Useful for HSV verification testing.
 
+## Adding new slides only (orphan pairing)
+
+1. Name files per `incoming/README.md` (e.g. `slide_lung_MT_WT1_WO7842.jpeg`).
+2. Drop them in **`iphone_images/incoming/`**.
+3. Run `python code/pair_orphan_slides.py` (preview), then `--apply` to create new `set_NN` files paired with an existing block silhouette (tissue + genotype match).
+
 ## Source
 All images taken by Ezekiel (intern) using iPhone, on a flicker-free LED backlight pad provided by mentor Zbigniew at La Jolla Institute of Immunology Microscopy & Histology Core Facility, May 2025.
