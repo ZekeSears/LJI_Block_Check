@@ -29,4 +29,9 @@ Do not copy built-in Cursor skills from `~/.cursor/skills-cursor/` — that dire
 
 ## This project
 
-Planning steps are documented in `.cursor/docs/planning-workflow.md`. Add skills here only if you want repo-local copies of synthesizer / critic behavior instead of relying on global skills.
+| Skill | Purpose |
+|-------|---------|
+| `lji-wiki-save` | File stated learnings into Obsidian (`LJI Histology Project` vault) |
+| `lji-wiki-query` | Answer from saved notes (hot → index → pages) |
+
+Planning steps: `.cursor/docs/planning-workflow.md`. Global copies: `~/.cursor/skills/session-synthesizer`, `pre-mortem-critic`.

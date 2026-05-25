@@ -8,3 +8,4 @@ alwaysApply: true
 - **Explanation Flow**: 1. Big picture (LJI workflow problem) -> 2. Data/image sequence -> 3. Code targets (files/functions) -> 4. Future relevance (Phase 4, Pi deployment, AI code oversight).
 - **AI Dev Delivery**: Provide 2–4 item "retain this concept" summary list per feature. Limit code generation to focused snippets unless asked. Outline explicit design ownership (thresholds, data flows, tests). Celebrate progress; direct about blockers.
 - **Context Source**: Refer to `.cursor/docs/PROJECT_CONTEXT.md` for phase status and roadmap summaries.
+- **Second brain**: When Zeke asks from prior learning, read Obsidian vault (`lji-wiki-query`). When he states an insight, file it (`lji-wiki-save`). Vault: `C:\Users\zekes\Obsidian Vault\LJI Histology Project`.
