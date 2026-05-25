@@ -1,223 +1,284 @@
-# Fix 1d — Plastic-first paraffin ROI (post–Fix 1c audit): Proposed Plan
+# Fix 1e — Backlit Rim + Parallelogram Cassette Anchor: Proposed Plan
 
-> **Status:** Plan v2 — approved for implementation (2026-05-25)  
-> **Date:** 2026-05-25  
-> **Source:** Brainstorm synthesis, isolated pre-mortem 2026-05-25, §7 defaults (parent confirmed)  
-> **Supersedes:** Fix 1c cassette detection ordering; Draft v1 §10 “v2 resolved” pretense removed
+> **Status:** Plan v2 — approved for implementation
+> **Date:** 2026-05-25
+> **Source:** Plan v1 + isolated pre-mortem review
+> **Supersedes:** Fix 1d as the primary cassette anchor strategy. Fix 1d code may remain as a baseline until this plan is implemented.
 
 ---
 
 ## 1. Objective
 
-Fix 1c regressed visual pilot to **1/10** (only set_04). Root cause is **cassette/wax localization**, not Otsu on dark tissue inside wax.
+Fix 1d improved telemetry but still produced a visually bad pilot: the ROI often covers a huge fraction of the phone image while `roi_ok=True`. The root problem is still **cassette anchoring**, not Otsu tissue segmentation inside a correct wax window.
 
-**Fix 1d:** Plastic-frame-first paraffin window, deferred `ambiguous_orientation`, gates G1–G5 (incl. slit + oversize), strict margin policy for `backlight_cc`, phone vs Pi constants, hybrid audit-only fallback.
+Fix 1e changes the anchor from axis-aligned envelope detection to a composed, classical stack:
 
-**Pilot gate (before 47-set regen):** Zeke visual **≥8/10** on frozen pilot set list using **ROI framing rubric only** (wax window; label/grid exclusion — not tissue match-ready). Geometry pre-check must align with G4/G5 on the **same 10 set IDs**.
+```text
+dark_frame coarse candidate
+  -> backlit rim signature votes
+  -> rotated cassette parallelogram (`minAreaRect` / 4 corners)
+  -> paraffin search inside the quad only
+  -> tight area gates with no phone envelope anchor
+```
 
-**Frozen:** `segment_tissue()`, `extract_contours()`, `clean_mask()`, descriptor APIs.
+**Pilot gate:** Zeke visual **>=8/10** on the frozen 10-set ROI rubric (`02, 04, 06, 11, 28, 31, 33, 35, 40, 45`). This gate is ROI framing only: wax window visible, label/grid mostly excluded, and cassette framing plausible. It does **not** claim the signal gate, matcher, or Phase 4 are fixed.
 
-**Milestone scope (explicit):** Fix 1d closure means pilot + tests + telemetry. It does **not** imply Tier B router work, Phase 4 unlock, or `SIGNAL_MISSING` resolution until contour profile regen and gap histogram are reviewed post-pilot.
+**Hardware stance:** Do not wait for the Raspberry Pi rig to start Fix 1e. The phone library is the stress test; the Pi rig should make constants easier after first captures. The PiShop box is expected Tuesday/tomorrow for bring-up; Amazon camera stack is also Tuesday; VXB gantry is not confirmed.
+
+**Frozen APIs:** Do not change public signatures for `segment_tissue()`, `extract_contours()`, `clean_mask()`, descriptor functions, or matcher/router entry points. Extend ROI dataclasses and telemetry compatibly.
 
 ---
 
 ## 2. Proposed Architecture & Pipeline Steps
 
-1. **Constants** — Load `phase3_outputs/block_roi_constants_{phone|pi}.json` by `meta.capture_source` (default `phone` only when meta omits field; see §2.13). Cache at module init; expose `reload_block_roi_constants()` for tests.
+1. **Constants and capture source**
+   - Approach: Continue `phase3_outputs/block_roi_constants_{phone|pi}.json`, but add Fix 1e keys for quad area, rim signature sampling, and anchor method policy. Default missing `capture_source` to `phone` with telemetry.
+   - Inputs: `meta.capture_source`, constants JSON.
+   - Outputs: Loaded constants, `capture_source` telemetry, testable reload behavior.
 
-2. **Margin test (strict, data-derived)** — `has_backlight_margin` → `has_strong_margin` only if perimeter bright fraction ≥ `MARGIN_STRICT_MIN_PERIM_FRAC`. **Phone value:** derive from `contour_profile.csv` rows where `role=block_silhouette` (47-set calibration pool): compute perimeter bright-fraction per row, take **p10** of the distribution, round to 3 decimals, write to `block_roi_constants_phone.json` with JSON comment citing row count, min/median/p10. **Pi value:** same procedure when Pi batch exists; until then stub mirrors phone keys with `"_comment": "fill on first Pi batch"`. Weak glow → **no** `backlight_cc`.
+2. **Coarse dark-frame candidate**
+   - Approach: Threshold dark cassette/frame material, morphology-close it, then keep contours in a plausible cassette area band. Phone initial band: candidate area **15-45% inclusive** for coarse frame blobs, with separate final quad gate below.
+   - Inputs: Grayscale block silhouette.
+   - Outputs: One or more candidate contours and candidate `minAreaRect`s, each with deterministic candidate telemetry.
 
-3. **Cassette chain (phone)** — `plastic_frame` → `dark_frame` → `paraffin_envelope` (guarded) → `geometric_inset`. **`backlight_cc` disabled when `capture_source=phone`.** If `plastic_frame` fails, continue chain; do not assume plastic bbox for paraffin steps until a method succeeds.
+3. **Rim signature validator**
+   - Approach: For boundary samples, score the outside-to-inside profile for **bright -> dark trough -> brighter inward**. Accept candidates by vote count/fraction, not by requiring all four sides.
+   - Numeric v2 default: sample along the inward normal of each ordered rectangle side at offsets `[-12, -6, 0, +6, +12]` pixels from the candidate edge, with negative offsets outside the candidate and positive offsets inside. Normalize intensities by local 5-sample median and clamp to `[0, 255]`. A sample-line vote passes when the edge/trough value is at least `20` intensity units darker than the brighter outside sample and the inward rebound is at least `12` intensity units brighter than the trough. A side passes when at least `50%` of its sample lines vote. A candidate passes the rim validator when at least `2` sides pass and side support is not concentrated on only one side/corner.
+   - Inputs: Grayscale image, candidate contour/rect, cassette center.
+   - Outputs: `rim_signature_votes`, `rim_signature_vote_frac`, `rim_side_votes`, `rim_side_vote_fracs`, accepted/rejected candidate reason.
+   - Known exceptions: sets 06/31 may show 0/4 edge votes because tissue/lung fills the field; those should not silently fall back to full-frame envelope.
 
-4. **Cassette chain (pi)** — If `has_strong_margin` → `backlight_cc`; else same as phone (steps 3 fallback order).
+4. **Candidate arbitration**
+   - Approach: Score all candidates before choosing an anchor. Candidate ordering is deterministic: passing rim validator first, then higher `rim_signature_vote_frac`, then better side-support coverage, then area closer to the phone quad-area midpoint, then smaller absolute angle only as a final tie-breaker. If the top two passing candidates have scores within `0.05` or disagree by more than `20%` image area, fail closed with `failure_reason=ambiguous_candidates` rather than picking the first/largest contour.
+   - Inputs: All dark-frame candidates with rim and geometry telemetry.
+   - Outputs: `selected_candidate_index`, `candidate_count`, `candidate_scores`, `rejected_candidate_reasons`, `failure_reason` when ambiguous.
 
-5. **Fail-closed production path** — When all cassette methods fail and `allow_full_frame_fallback=False` (production default): return empty mask, `roi_ok=False`, explicit `failure_reason` (e.g. `cassette_chain_exhausted`). **Never** silent full-frame ROI in production. Audit CLI may set `allow_full_frame_fallback=True`; PNG title must include `fallback=analysis`.
+5. **Parallelogram anchor**
+   - Approach: Fit `cv2.minAreaRect` to the rim-supported contour or passing boundary points. Convert to four ordered corners. Keep the shape as a parallelogram/rotated rectangle for gates and audit overlay; do not reduce it to an axis-aligned bbox for acceptance.
+   - Quality check: a rectangle cannot pass on area/aspect alone. It must have side support on at least two non-adjacent sides or three total sides; one-side and one-corner support fail with `failure_reason=insufficient_side_support`.
+   - Inputs: Accepted contour or rim-supported point cloud.
+   - Outputs: `cassette_corners_original`, `cassette_angle_deg`, `cassette_area_frac`, `anchor_shape=parallelogram`.
 
-6. **Inner inset** — ~6% per side (from phone JSON `INNER_INSET_FRAC`; Pi may override after calibration).
+6. **Phone envelope ban and fallback policy**
+   - Approach: For `capture_source=phone`, `paraffin_envelope` cannot set the cassette anchor. If dark/rim/quad fails, production returns `roi_ok=False` with explicit `failure_reason`. Audit may draw the last failed candidate, but must label it as failed.
+   - Weak-rim default: sets in the 06/31 class fail closed with `weak_rim_signature` unless a dark-frame candidate passes the same deterministic arbitration and side-support checks. There is no degraded envelope/full-frame pass in Fix 1e.
+   - Inputs: Candidate failures and `allow_full_frame_fallback`.
+   - Outputs: Fail-closed result; no phone `roi_ok=True` from `paraffin_envelope`.
 
-7. **Paraffin window** — Inside **successful** cassette bbox only: try row projection first; if row mask area < `PARAFFIN_ROW_MIN_FRAC` of inner area, fall back to morph; log `paraffin_method=rows|morph`. If plastic bbox was used but row and morph disagree by >20% area, set telemetry `paraffin_disagreement=True` (debug only; do not auto-fail).
+7. **Coordinate contract, inner inset, and paraffin search**
+   - Approach: Tier A is now locked. Anchor detection, candidate arbitration, gate decisions, telemetry, and final mask output are owned in original image coordinates. A bounded warp may be used only as a temporary crop workspace after a cassette quad has passed gates.
+   - Coordinate fields:
+     - `cassette_corners_original`: four ordered original-image points, `TL, TR, BR, BL`.
+     - `paraffin_quad_original`: original-image paraffin/wax-window quad when available.
+     - `paraffin_bbox_original`: axis-aligned original-image bbox enclosing the paraffin quad/crop.
+     - `warp_matrix_original_to_crop` and `warp_matrix_crop_to_original`: recorded only when warp is used.
+     - `mask`: always returned in original image coordinates and image shape.
+   - Warp bound: crop before warping; canonical crop dimensions are capped at `640x480` for phone/Pi execution unless a later calibrated constant lowers them. Large full-image warps are forbidden for production ROI.
+   - Inputs: Ordered cassette corners, BGR/gray image.
+   - Outputs: `paraffin_bbox_original` or `paraffin_quad_original`, `paraffin_method`, Otsu crop coordinates/transform.
 
-8. **Opposite-end strip** — Compute short-end scores on plastic bbox. If delta > `STRIP_DELTA_MIN` (default 0.10): apply strip to lower-scoring end; `strip_method=opposite_end`. If delta ≤ threshold: `strip_method=none`. **`ambiguous_orientation`** only if aspect ratio in `[ASPECT_NEAR_SQUARE_MIN, ASPECT_NEAR_SQUARE_MAX]`, morph paraffin failed, **and** |score_a − score_b| < `AMBIGUOUS_SCORE_TIE_EPS` — defer hard fail (sets 02/33 regression). Success path for 02/33 must show `strip_method != none` when delta >10% on real/synthetic fixtures.
+8. **Opposite-end strip policy**
+   - Approach: Strip grid/label only when the anchor is confident and short-end score delta exceeds the configured threshold. `anchor_confident=True` requires a selected candidate with passing rim validator, passing side-support check, non-ambiguous arbitration, and no geometry gate failures. The short-end delta is the absolute difference between the two short-end transition/texture scores divided by the larger score; default threshold is `0.20` inclusive. Do not apply strip after a failed or low-confidence geometric fallback.
+   - Inputs: Anchored quad/crop, short-end texture/transition scores.
+   - Outputs: `strip_method`, strip side, `short_end_score_delta`, confidence telemetry.
 
-9. **ROI gates G1–G5** (shared functions; JSON keys) —
-   - **G1** `paraffin_low` — wax signal below floor  
-   - **G2** `roi_narrow` — width vs inner frame  
-   - **G3** `backlight_flood` — perimeter flood heuristic  
-   - **G4** `roi_sliver` — ROI height ≥ `G4_MIN_HEIGHT_FRAC` of inner height (default **0.15**; tune to 0.12 only if ≥8/10 wax framing already passes and only esophagus wide layouts fail — document in calibration notes)  
-   - **G5** `roi_oversize` — ROI area ≤ `G5_MAX_AREA_FRAC` of image (default **0.90**)  
-   - **G6** `empty_wax` — no paraffin signal  
+9. **Tight ROI gates**
+   - Approach: Replace oversized G5=0.90 behavior with quad-aware gates. Exact v2 draft constants live in JSON and tests assert boundary behavior:
+     - `coarse_candidate_area_frac_min=0.15`, `coarse_candidate_area_frac_max=0.45`, inclusive.
+     - `cassette_quad_area_frac_min=0.06`, `cassette_quad_area_frac_max=0.35`, inclusive.
+     - `final_roi_area_frac_min=0.06`, `final_roi_area_frac_max=0.55`, inclusive.
+     - `min_roi_short_side_frac_of_cassette_short_side=0.25`, inclusive lower bound.
+     - `cassette_aspect_ratio_min=1.20`, `cassette_aspect_ratio_max=3.80`, inclusive.
+   - Provenance: these are Fix 1e draft constants from the plan context's clicked-quad/phone-pilot ranges. Implementation may later replace them only through a calibration script/report, not ad hoc tuning inside ROI code.
+   - Inputs: Quad geometry, final ROI geometry, image shape.
+   - Outputs: `gate_failures`, `roi_ok`, `failure_reason`.
 
-10. **Otsu on crop** — Frozen `segment_tissue()` on gated crop only.
+10. **Segmentation inside accepted crop only**
+   - Approach: Run frozen `segment_tissue()` only after the ROI gates pass. Post-Otsu production guards (`seg_empty`, `seg_flood`, `seg_blob` where appropriate) remain fail-closed.
+   - Inputs: Gated crop/warp.
+   - Outputs: Mask in original image coordinates, ROI telemetry fields.
 
-11. **Post-Otsu (production)** — `seg_empty`, `seg_flood`, `seg_blob` (esophagus only, requires reliable `tissue_class` in meta). Fail → empty mask + `reshoot_recommended=True`; no audit fallback. **`seg_blob` skipped for lung.**
+11. **Audit overlays and reports**
+    - Approach: Audit PNGs draw the parallelogram, the final crop/ROI, and the last failed candidate when applicable. Titles include `anchor_method`, `anchor_shape`, `area_frac`, `rim_votes`, `roi_ok`, and failure reason.
+    - Failure semantics: successful anchors and failed candidates must use distinct title text and overlay styling. Failed candidate overlays must include `roi_ok=False` and `failure_reason` in both the report row and the PNG title/caption.
+    - Visualization invariants: preserve BGR->RGB conversion before matplotlib, create output directories with `parents=True, exist_ok=True`, and close every figure with `plt.close(fig)`.
+    - Inputs: ROI result object.
+    - Outputs: `phase3_outputs/roi_crop_audit/*.png`, `phase3_outputs/pilot_roi_geometry_report.md`, updated CSV telemetry.
 
-12. **Hybrid** — `allow_full_frame_fallback` only audit CLI / `segmentation_audit_pack.py --analysis-fallback`; PNG title `fallback=analysis`.
-
-13. **`capture_source` propagation** — Block silhouette paths must set `meta.capture_source` from filename prefix or inventory sidecar (`phone` for `iphone_images/` benchmark). Default `phone` when missing is **documented** in constants README comment and asserted in loader test; add pipeline inventory check that all `block_silhouette` rows in regen CSV include `capture_source`.
+12. **Pi calibration path**
+    - Approach: After the Pi/camera rig captures first usable images, fill `block_roi_constants_pi.json` from Pi photos rather than copying phone thresholds blindly. First Pi work is bring-up and capture calibration, not a blocker for phone pilot.
+    - Guard: Pi constants include `pi_constants_calibrated=false` until real rig stills produce thresholds. Unknown capture sources and uncalibrated Pi constants may load for audit/bring-up telemetry, but cannot silently produce `roi_ok=True` production passes.
+    - Inputs: Pi stills, fixed exposure/FOV notes.
+    - Outputs: Pi constants update and comparison note; no Hailo/ML dependency.
 
 ---
 
 ## 3. Data Flow
 
-| Stage | Input | Output / fields |
-|-------|--------|-------------------|
-| Entry | BGR block silhouette, `meta.role`, `meta.tissue_class`, `meta.capture_source` | — |
-| Cassette | Gray + color features | `cassette_method`, `plastic_bbox`, `failure_reason` if chain fails |
-| Paraffin | Plastic or fallback bbox | `paraffin_method`, `paraffin_bbox`, `paraffin_disagreement` |
-| Strip | Short-end scores | `strip_method`, `ambiguous_orientation` (bool) |
-| Gates | Inner frame + ROI geom | `gate_failures[]`, `roi_ok` |
-| Segment | Crop BGR | `mask`, `seg_*` flags, `reshoot_recommended` |
-| Aggregate | — | `SegmentationWithRoi`: `{roi_ok, failure_reason, cassette_method, paraffin_method, strip_method, capture_source, gate_failures, mask, reshoot_recommended, ambiguous_orientation}` |
+### Inputs
 
-**Outputs:** Updated block rows in `contour_profile.csv` (new telemetry columns), pilot audit PNGs under `phase3_outputs/roi_crop_audit/`, geometry report `phase3_outputs/pilot_roi_geometry_report.md`. **No** full 47-set similarity matrix regen until §9 criteria 1–3 satisfied.
+- BGR block silhouette image.
+- Metadata: `role`, `tissue_class`, `capture_source`, `set_id`.
+- Constants: `block_roi_constants_phone.json`, `block_roi_constants_pi.json`.
+- Evidence/calibration:
+  - `phase3_outputs/plastic_rim_clicks.json`
+  - `phase3_outputs/plastic_rim_viability.md`
+  - `phase3_outputs/fix1d_roi_audit_report.md`
+  - `phase3_outputs/pilot_roi_rubric.md`
+  - `docs/superpowers/specs/2026-05-26-fix-1e-backlit-rim-parallelogram-anchor-design.md`
+  - `docs/superpowers/specs/2026-05-26-pi-bringup-and-classical-strategy.md`
+
+### Transformations
+
+1. Validate BGR image and load constants for capture source.
+2. Convert to grayscale and generate dark-frame candidate contours.
+3. Score candidate boundaries with rim profile samples.
+4. Fit and order a parallelogram anchor from the accepted candidate.
+5. Apply area/aspect/sliver gates on quad geometry.
+6. Search for paraffin inside the quad/inset only.
+7. Optionally warp the accepted crop for Otsu while preserving original-image telemetry.
+8. Run frozen segmentation and post-segmentation guards.
+9. Emit mask, telemetry, CSV fields, and audit overlay.
+
+### Outputs
+
+- `SegmentationWithRoi` extended with:
+  - `anchor_method`
+  - `anchor_shape`
+  - `cassette_corners_original`
+  - `cassette_angle_deg`
+  - `cassette_area_frac`
+  - `selected_candidate_index`
+  - `candidate_count`
+  - `candidate_scores`
+  - `rejected_candidate_reasons`
+  - `rim_signature_votes`
+  - `rim_signature_vote_frac`
+  - `rim_side_votes`
+  - `rim_side_vote_fracs`
+  - `paraffin_quad_original`
+  - `paraffin_bbox_original`
+  - `warp_matrix_original_to_crop`
+  - `warp_matrix_crop_to_original`
+  - `gate_failures`
+  - `failure_reason`
+- Updated `roi_fields_from_result()` CSV fields.
+- Pilot audit PNGs with parallelogram overlay.
+- Pilot geometry report for the frozen 10 sets.
+- Updated phone constants and Pi stub/constants if needed.
 
 ---
 
 ## 4. Key Decisions & Rationale
 
-| Decision | Rationale | v2 mitigation (traceable) |
-|----------|-----------|---------------------------|
-| Plastic-first anchor | 44/47 audit had plastic-visible frames; wrong bbox shifts paraffin before G4/G5 | §5 plastic pilot table; fail-closed §2.5; tests §7 |
-| `MARGIN_STRICT` from CSV | Avoid guessed 0.05+ that rejects dim phone edges | §2.2 p10 on `block_silhouette` rows; JSON comments |
-| Phone disables `backlight_cc` | Weak perimeter glow mis-triggers full-frame | §2.3–4 + `test_phone_never_backlight_cc` |
-| G4 height ≥15% | Audit slits (06, 11) | §2.9 G4; shared with geometry script |
-| G5 area ≤90% | Full-frame ROI class | §2.9 G5; shared with geometry script |
-| `ambiguous_orientation` deferred | 02/33 ablation | §2.8 tie rule; dedicated tests |
-| ROI-only visual rubric | Tissue match-ready is segmentation audit, not Fix 1d | §6 `pilot_roi_rubric.md` |
-| Signal gate unchanged | Median gap −0.305; pilot ≠ matcher fix | §1 milestone scope |
-| Real JPEG policy | `iphone_images/` gitignored | §7 fixtures + skip markers |
-| Constants reload | Avoid pytest stale cache | `reload_block_roi_constants()` §2.1 |
+| Decision | Chosen Approach | Alternatives Considered | Rationale |
+|----------|----------------|--------------------------|-----------|
+| Anchor model | Dark-frame candidate + rim signature + parallelogram | Global plastic gray, paraffin envelope, center crop, Hough lines | Global gray is mixed-profile; envelope selects ~98% frame; center crop is a hack; Hough likely breaks on grid/label. |
+| Geometry | `minAreaRect` / ordered corners | Axis-aligned bbox only | User calibration quads are rotated; AABB over-includes image corners and repeats the huge-ROI failure class. |
+| Phone fallback | Fail closed; draw last candidate in audit only | `paraffin_envelope`, full-frame, geometric inset pass | False `roi_ok=True` is worse than honest failure. |
+| Gate area | Quad/final ROI area around 6-55% | G5 <= 90% image | Fix 1d allowed ~76% ROI to pass; user corner quads are far smaller. |
+| Pi timing | Implement/test now on phone, recalibrate when rig arrives | Wait for hardware before code | Phone validates robust logic; Pi improves constants but should not block planning or tests. |
+| ML/Hailo | Defer; classical first | Train ML immediately | Current PO lacks Hailo; labels do not exist; classical is explainable and likely easier under fixed lighting/FOV. |
+| Warp tier | Tier A: quad telemetry, optional crop warp only | Full canonical warp for entire ROI pipeline | Lower implementation and memory risk on Pi; still supports rotated cassette. |
 
 ---
 
-## 5. Plastic-frame pilot acceptance (pre-coding gate)
+## 5. Dependencies
 
-Before merging paraffin-window logic, validate **plastic bbox alone** on pilot 10 (visual pass/fail per set). Criteria per set: bbox covers cassette plastic rim; excludes majority of label/grid; not full-image. Record in geometry report; implementation may proceed in parallel with unit tests but **pilot PNG regen** waits until plastic step passes ≥8/10 plastic-only spot check OR documented exception with mentor note.
+| Library/Tool | Purpose | Version Constraint |
+|--------------|---------|--------------------|
+| OpenCV (`cv2`) | Thresholding, morphology, contour extraction, `minAreaRect`, `boxPoints`, optional `warpPerspective` | Existing project dependency |
+| NumPy | Masks, profiles, geometry math | Existing project dependency |
+| pytest | Deterministic unit/integration checks | Existing project dependency |
+| Existing audit scripts | Pilot PNG generation and geometry reporting | Keep CLI-compatible where possible |
 
-| Set ID | Tissue (reporting) | Plastic bbox expectation |
-|--------|-------------------|---------------------------|
-| 02 | lung | Strip end clears grid; plastic visible |
-| 04 | esophagus | Golden regression — must remain pass |
-| 06 | lung | No vertical slit — G4 target |
-| 11 | esophagus | No slit; wax band centered |
-| 28 | esophagus | Post-Otsu flood class guarded |
-| 31 | lungs | Standard cassette |
-| 33 | lung | Same strip policy as 02 |
-| 35 | lungs | Standard cassette |
-| 40 | esophagus | Pi-like aspect; phone constants |
-| 45 | esophagus | Standard cassette |
+No ML dependencies are part of Fix 1e. If ML is later approved, it gets a separate spec and plan.
 
 ---
 
-## 6. Pilot visual rubric (ROI framing only)
+## 6. V2 Resolutions, Open Risks, and Implementation Defaults
 
-**Artifact:** `phase3_outputs/pilot_roi_rubric.md` (created at implementation start; this section is authoritative content).
+The isolated pre-mortem found no user blockers. Plan v2 resolves every critical item as implementation text:
 
-**Sets:** `02, 04, 06, 11, 28, 31, 33, 35, 40, 45` — same as Fix 1c audit.
+- **Candidate arbitration resolved:** all candidates are scored before selection, deterministic tie-breakers are defined, ambiguous top candidates fail closed, and rejected-candidate telemetry is required.
+- **Coordinate contract resolved:** all accepted geometry, telemetry, and final masks are in original image coordinates; warp is a bounded temporary workspace only; every transform field is named.
+- **Gate constants resolved:** draft thresholds are exact JSON keys with inclusive boundary behavior; future changes require calibration output rather than implementation guesses.
+- **Rim profile math resolved:** sample direction, offsets, normalization, trough/rebound thresholds, side votes, and candidate acceptance are specified for TDD.
 
-**Pass per set (1 point each dimension, max 3 → set pass if ≥2/3):**
+Remaining risks are implementation risks, not plan blockers:
 
-| Dimension | Pass | Fail |
-|-----------|------|------|
-| Wax window | Paraffin window visible; not full-frame; not extreme slit | Full frame, sliver, or wax missing |
-| Label/grid exclusion | Label and grid mostly outside ROI | Label or grid dominates crop |
-| Cassette framing | Plastic/cassette context plausible | Obvious wrong cassette region |
-
-**Set pass:** ≥2/3 dimensions pass. **Pilot pass:** ≥8/10 sets pass. **Out of scope:** tissue silhouette match-ready, constellation score, verification gap.
-
-**Geometry pre-check (same 10 IDs):** `code/pilot_roi_geometry_check.py` calls **same** `evaluate_roi_gates()` (or shared module) and reads `G4_MIN_HEIGHT_FRAC`, `G5_MAX_AREA_FRAC` from phone JSON — no duplicate thresholds. Report `slit`/`flood` flags; Zeke visual only on sets with zero flags OR documented override in rubric notes.
+- **Constants drift:** Phone constants must not be treated as Pi constants after rig captures arrive. Pi JSON must be recalibrated from first rig stills and remains `pi_constants_calibrated=false` until then.
+- **Quad ordering bugs:** Misordered corners can mirror or rotate the warp incorrectly. Tests must lock TL/TR/BR/BL ordering and area computation.
+- **Telemetry compatibility:** New fields must not break existing CSV consumers; old fields remain present, and downstream readers must ignore unknown columns.
+- **Audit illusion risk:** Failed candidates must be visually and machine-readably distinct from successful anchors.
+- **Signal gate risk:** Better ROI may improve masks, but the current median gap is still `SIGNAL_MISSING`; do not claim matcher success until post-pilot regen and histograms are reviewed.
 
 ---
 
 ## 7. Testing Considerations
 
-| Test / check | Success criterion | Pre-mortem §6 item |
-|--------------|-------------------|-------------------|
-| `test_margin_strict_from_json` | Loader reads `MARGIN_STRICT_MIN_PERIM_FRAC`; value matches calibration script output | Margin data-derived |
-| `test_load_phone_constants` / `test_load_pi_constants_stub` | Phone + Pi JSON load; Pi null/sentinel keys accepted | Pi stub schema |
-| `test_phone_never_backlight_cc` | `capture_source=phone` → method ≠ `backlight_cc` | Phone policy |
-| `test_pi_may_use_backlight_cc_with_margin` | `capture_source=pi` + synthetic strong margin → `backlight_cc` allowed | Inverse guard |
-| `test_cassette_chain_fail_closed` | All methods fail, production flag → empty mask, `failure_reason` set | Fail-closed |
-| `test_plastic_absent_falls_through` | No plastic → dark_frame or envelope or inset or fail; never silent full frame | Plastic-first fail closed |
-| `test_roi_sliver_rejects_set06_class` | Real JPEG or `tests/fixtures/roi/set_06_sliver.jpg`; not `roi_ok` | G4 + geometry align |
-| `test_set02_set33_roi_ok_plastic` | Real JPEG or committed fixture; `ambiguous_orientation` false; `strip_method != none` when delta>10% | Opposite-end strip |
-| `test_set04_golden_regression` | Still passes | Golden |
-| `test_seg_flood_set28_class` | mask frac >0.85 → production fail, no audit fallback | Post-Otsu |
-| `test_geometry_script_matches_g4_g5` | Synthetic slit triggers both geometry report and pytest G4 | Align geometry |
-| `test_reload_block_roi_constants` | Mutate JSON → reload → new value | Stale cache |
-| `test_capture_source_default_documented` | Missing meta → phone + warning telemetry | Default policy |
-| Real JPEG policy | `@pytest.mark.skipif(not path.exists(...))` with reason `iphone_images missing` | Real-image policy |
-| `pytest tests/` (non-integration) | All pass | Regression |
-| Visual pilot | ≥8/10 per §6 | Pilot rubric |
+| What to Test | Method | Success Criteria | Related Phase |
+|--------------|--------|------------------|---------------|
+| Dark-frame candidate area | Synthetic frames + fixture images | Candidate area in configured band; oversize/undersize rejected | Fix 1e ROI |
+| Rim signature scoring | Synthetic 1D profiles and small image patches | Bright-dark-bright profiles pass; flat, glare-only, and dark-tissue profiles fail under the numeric v2 thresholds | Fix 1e ROI |
+| Multi-candidate arbitration | Synthetic image with true rotated cassette plus larger label/grid-like dark blob | Selected candidate is the rim-supported cassette, or the result fails closed with `ambiguous_candidates`; never first/largest by accident | Fix 1e ROI |
+| Parallelogram area and corner ordering | Rotated synthetic rectangles | Ordered TL/TR/BR/BL corners; area stable under rotation; one-side/one-corner support fails | Fix 1e ROI |
+| Coordinate round-trip | Synthetic rotated wax patch with optional crop warp | Original-image mask/quad overlaps expected patch within documented tolerance; mirrored/rotated corner mistakes fail | Fix 1e ROI |
+| Phone envelope ban | Unit test with phone source and envelope-like image | `cassette_method != paraffin_envelope`; failure if no better anchor | Fix 1e ROI |
+| Gate boundaries | Synthetic geometry at below/equal/above exact JSON constants | Inclusive bounds pass at equality and fail just outside each gate | Fix 1e ROI |
+| G5 tightening | Synthetic huge ROI (~76%) | Rejected with `roi_oversize` | Fix 1e ROI |
+| Sliver gate | Synthetic short-height ROI and set_06-class fixture | Rejected with `roi_sliver` | Fix 1e ROI |
+| Optional warp crop | Synthetic rotated wax patch | Otsu crop maps mask back to original coordinates | Fix 1e ROI |
+| Telemetry serialization and consumers | `roi_fields_from_result()` plus downstream CSV/audit reader tests | New fields present, old fields preserved, unknown columns ignored | Phase 3 pipeline |
+| Failure audit semantics | Report/title assertions for failed candidates | `roi_ok=False`, `failure_reason`, and failed-candidate label are visible in CSV/report/title | Fix 1e audit |
+| Pilot 10 audit | Regenerate PNGs and rubric review | Each set records pass/fail, reason, reviewer/date, and audit PNG filename; Zeke visual >=8/10 | Pilot gate |
+| Pi constants stub | Loader test | Pi source loads with explicit uncalibrated status; uncalibrated Pi constants cannot silently pass production ROI gates | Hardware bring-up |
 
-**Fixtures:** Commit minimal `tests/fixtures/roi/` (set_04 golden, set_06 slit class, set_02/33 strip cases) so CI is green without gitignored library.
+**TDD rule:** Core helpers used by segmentation flow require tests before implementation. Leaf audit/report changes may be implemented with lighter tests but must not become hidden decision logic.
 
 ---
 
 ## 8. Implementation Files
 
-| File | Change |
-|------|--------|
-| `code/phase3_block_roi.py` | Fix 1d logic; shared gate helpers; `reload_block_roi_constants()` |
-| `code/calibrate_margin_strict.py` | One-off: read `contour_profile.csv` block_silhouette rows → emit p10 + stats for JSON comment |
-| `phase3_outputs/block_roi_constants_phone.json` | Thresholds incl. `MARGIN_STRICT_MIN_PERIM_FRAC` with derivation comment |
-| `phase3_outputs/block_roi_constants_pi.json` | Stub mirrors phone keys |
-| `phase3_outputs/pilot_roi_rubric.md` | Frozen checklist (content from §6) |
-| `code/pilot_roi_geometry_check.py` | Leaf: imports shared gates; writes `pilot_roi_geometry_report.md` |
-| `tests/test_phase3_block_roi.py` | Extended per §7 |
-| `tests/fixtures/roi/` | Minimal committed JPEGs/PNGs |
-| `code/segmentation_audit_pack.py` | `--analysis-fallback` |
-| `docs/superpowers/specs/2026-05-25-fix-1d-roi-plastic-first-design.md` | Design cross-ref |
-| `.cursor/docs/PROJECT_CONTEXT.md` | §4 Fix 1d implemented / pilot result (after work) |
-
-**Contour profile regen (post-pilot only):** Document new columns (`strip_method`, `capture_source`, `paraffin_method`, `paraffin_disagreement`) in `phase3_calibration_notes.md`; router ignores unknown columns by default.
+| File | Planned change |
+|------|----------------|
+| `code/phase3_block_roi.py` | Add dark/rim/parallelogram anchor helpers, quad-aware gates, phone envelope ban, telemetry fields, optional warp crop path. |
+| `phase3_outputs/block_roi_constants_phone.json` | Add exact Fix 1e constants: rim sample offsets `[-12,-6,0,6,12]`, trough depth `20`, rebound `12`, side pass fraction `0.50`, candidate ambiguity delta `0.05`, area/aspect/sliver gates, warp cap, and method policy. |
+| `phase3_outputs/block_roi_constants_pi.json` | Keep schema-compatible stub with `pi_constants_calibrated=false`; fill after first Pi capture batch. |
+| `tests/test_phase3_block_roi.py` | Add TDD coverage for rim scoring, multi-candidate arbitration, coordinate round-trip, quad geometry, phone envelope ban, sliver/oversize gates, gate boundaries, Pi stub guard, and telemetry serialization/consumer compatibility. |
+| `phase3_outputs/pilot_roi_rubric.md` | Reuse frozen pilot rubric; update title if needed from Fix 1d to Fix 1e. |
+| `code/pilot_roi_geometry_check.py` | Ensure report uses the same quad-aware gates as production. |
+| `code/segmentation_audit_pack.py` or audit CLI | Draw parallelogram and failed candidate overlays while preserving BGR->RGB, `plt.close(fig)`, distinct failure styling, and output-directory creation invariants. |
+| `.cursor/docs/PROJECT_CONTEXT.md` | Update after pilot result and/or Pi bring-up milestone. |
 
 ---
 
 ## 9. Acceptance Criteria
 
-1. All §7 tests pass (including skip markers documented).  
-2. `calibrate_margin_strict.py` run once; phone JSON field matches script output.  
-3. Geometry report on pilot 10: ≥8 sets with zero slit/flood flags (same gate functions as production).  
-4. Zeke visual **≥8/10** per `pilot_roi_rubric.md` (ROI framing only).  
-5. **Then** contour profile regen on 47 sets; **then** review gap histogram — do not claim signal-gate fix until reviewed.  
-6. No full pipeline similarity regen until 1–4 met.
+1. Tests for core Fix 1e helpers are written before source implementation.
+2. `pytest tests/` passes, or any skipped real-image tests are explicitly marked with missing-fixture reasons.
+3. Multi-candidate images are resolved by deterministic score/tie-break rules or fail closed with `ambiguous_candidates`.
+4. All ROI output geometry has declared original-image coordinate ownership, and coordinate round-trip tests pass.
+5. Exact JSON gate constants are present and boundary-tested.
+6. Rim-profile tests cover bright-dark-bright, flat, glare-only, and dark-tissue profiles.
+7. For `capture_source=phone`, no successful ROI may use `cassette_method=paraffin_envelope`.
+8. Oversize phone ROI class (~76% of image) fails G5 or equivalent quad-aware gate.
+9. Pilot 10 audit PNGs draw the parallelogram and final ROI clearly, with failed candidates visibly distinct.
+10. Zeke visual score is **>=8/10** using `phase3_outputs/pilot_roi_rubric.md`, with per-set pass/fail, reason, reviewer/date, and PNG filename recorded.
+11. Full 47-set contour/profile regen occurs only after pilot pass.
+12. Signal-gate or Phase 4 claims require post-regen histogram review; Fix 1e alone does not unlock Tier B router tuning.
 
 ---
 
-## 10. Pre-mortem §6 critical checklist — mitigations (not pre-resolved in v1)
+## 10. Asynchronous Execution Macro
 
-| §6 critical item | Plan v2 mitigation | Verification |
-|------------------|-------------------|--------------|
-| Remove §10 pretense | This section replaces v1 §10 | v2 status header |
-| `MARGIN_STRICT` from data | §2.2, `calibrate_margin_strict.py`, JSON comments | `test_margin_strict_from_json` |
-| Plastic-frame pilot acceptance | §5 table + geometry report | Manual + ≥8 plastic spot check |
-| Fail-closed cassette chain | §2.5, §2.3–4 | `test_cassette_chain_fail_closed`, `test_plastic_absent_falls_through` |
-| Freeze pilot IDs + rubric | §6, `pilot_roi_rubric.md` | Visual ≥8/10 |
-| Align geometry with G4/G5 | §6, shared `evaluate_roi_gates()` | `test_geometry_script_matches_g4_g5` |
-| Real-image test policy | §7 fixtures + skipif | CI docs in plan §7 |
+Implementation-time tasks that can run in parallel after this plan v2 approval:
 
-**Moderate items (during implementation, not v2 blockers):** `capture_source` inventory audit (§2.13); post-Otsu production path tests; constants reload (§2.1); PROJECT_CONTEXT signal-gate note (§1).
-
----
-
-## 11. Open Questions & Residual Risks
-
-- Pi constants: filled on first hardware batch; phone thresholds may mismatch FOV until recalibrated.  
-- G4 at 12%: only if §9 step 4 already ≥8/10 and esophagus wide layouts fail wax framing only.  
-- Plastic false positives (glare/label plastic): mitigated by §5 per-set table and fail-closed chain, not single global threshold.
-
----
-
-### Asynchronous Execution Macro
-
-Independent test/JSON work — run before `phase3_block_roi.py` implementation:
-
-```
+```text
 /multitask
-1. tests/test_phase3_block_roi.py — Add failing tests: fail-closed chain, plastic absent fall-through, G4 set_06 class, set_02/set_33 strip (fixtures under tests/fixtures/roi/), phone never backlight_cc, pi may backlight_cc, geometry/G4 alignment synthetic. No implementation in phase3_block_roi.py yet.
-2. code/calibrate_margin_strict.py + phase3_outputs/block_roi_constants_phone.json — Run script on contour_profile.csv block_silhouette rows; write p10 MARGIN_STRICT with stats comment; test_load_phone_constants + test_margin_strict_from_json only.
-3. phase3_outputs/pilot_roi_rubric.md + tests/fixtures/roi/README.md — Write rubric artifact from plan §6; add fixture README and placeholder paths; stub code/pilot_roi_geometry_check.py with docstring contract only (import gate helpers after they exist).
+1. Add TDD tests for Fix 1e core behavior in tests/test_phase3_block_roi.py: numeric rim profile scoring, multi-candidate arbitration, rotated quad ordering/area, coordinate round-trip, phone envelope ban, exact gate boundaries, oversize/sliver gates, Pi stub guard, and telemetry compatibility. Do not edit source implementation.
+2. Draft constants schema updates for phase3_outputs/block_roi_constants_phone.json and block_roi_constants_pi.json: rim sample offsets, trough/rebound thresholds, side vote thresholds, candidate arbitration deltas, exact quad/ROI/aspect/sliver gates, warp cap, capture-source policy, and Pi calibration status. Add loader tests only.
+3. Update audit/rubric artifacts: rename pilot rubric title to Fix 1e where appropriate, define the 10-set score record format, and prepare failure-semantics expectations for geometry reports and overlays; avoid changing ROI logic.
 ```
 
-**Sequential after macro:** Implement `phase3_block_roi.py` → `pytest tests/` → pilot PNG regen → Zeke rubric → geometry report → visual ≥8/10 → contour profile regen.
+Sequential after macro: print file-by-file pre-mortem mitigations -> implement `phase3_block_roi.py` core helpers -> run tests -> regenerate pilot audit PNGs -> Zeke rubric -> only then 47-set regen.
