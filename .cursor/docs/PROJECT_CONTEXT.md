@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT.md — LJI Histology Block-Check Pipeline
 
-> **Last updated:** 2026-05-24
+> **Last updated:** 2026-05-24 (Fix 1c design v2 — functional verification focus)
 > **Purpose:** Attach this file to every new Cursor chat with `@PROJECT_CONTEXT.md`.
 > It replaces the need to re-explain the project from scratch each session.
 > Update it when a phase closes or a major decision changes.
@@ -59,6 +59,12 @@ The full system has four capabilities. Each is a separate development track:
 **Output:** CSV exception report (flagged mismatches only). Only problems surface; clean
 matches are logged silently.
 
+**Production task vs dev benchmark:** In deployment, the QR code on a slide names **one**
+claimed block — the system verifies **match vs mismatch** (roughly 1-in-2), not open
+retrieval across all blocks in a session. The current integration metric (**set-paired
+top-3 among ~46 slides**) is a **stress test**, not the operational workflow. Low
+retrieval TPR and a usable verification gate are **not contradictory**.
+
 ---
 
 ## 4. Phase Status
@@ -84,19 +90,34 @@ matches are logged silently.
 - ✅ **Metrics-only router** — no filename tissue in routing; tissue tokens for TPR reporting only
 - ✅ End-to-end: `phase3_pipeline.py` → 47×46 matrix; yellow-tag label mask wired (`set_01` still degenerate — re-shoot candidate)
 - ✅ Option B closeout: `closeout_summary.md`, `ranking_failure_notes.md`; integration structural tests pass; 80% gate **xfail** by design
-- ⏳ Mentor sign-off on parallel Phase 4 (draft: `phase3_outputs/mentor_closeout_email_draft.md`)
+- ✅ **Signal gate v2** (2026-05-24): label-keyed gaps, verification metrics, segmentation audit, failure census, fragment probe — see `phase3_outputs/score_separation_report.md`
+- ✅ **Fix 1b — structural cassette ROI** (2026-05-24): 2D paraffin mask + morph close + semantic validation; HSV fallback when Otsu crop fails; **14/47** blocks `roi_detection_ok` (honest, not 100%); audit PNGs in `phase3_outputs/roi_crop_audit/` — set_04 ROI now frames paraffin window
+- 📋 **Fix 1c design v2** (brainstorm, not implemented): layered ROI — detection-based cassette (no primary central-% crop), grid/label on **opposite short ends**, **3** ROI geometry gates with `roi_fail_reason` logging, **Otsu-only** on blocks (reshoot if inadequate; no block HSV), pilot **≥7/10 visual** pass before 47-set regen. Spec: `docs/superpowers/specs/2026-05-24-block-capture-roi-design.md`; decisions: `phase3_outputs/mentor_questions.md`
+- ⏳ Formal cycle: synthesizer → `proposed_plan.md` v1 → pre-mortem → plan v2 → implement Fix 1c
+- ⏳ **Success bar:** functional verification **most of the time** on Pi captures — not mask perfection on full phone library
+- ⏳ Mentor alignment optional; Zeke policy in `mentor_questions.md`
 
-**47-set TPR (2026-05-24, metrics-only router, set_41 excluded from denominator):**
+**47-set retrieval TPR (2026-05-24 post-refresh; stress-test metric):**
 
-| Tissue | TPR |
-|--------|-----|
-| lung (4) | 0% |
-| lungs (23) | 13% |
-| esophagus (18) | 5.6% |
+| Tissue | TPR | Notes |
+|--------|-----|-------|
+| lung (4) | 0% | small N |
+| lungs (23) | 13% | 3/23 top-3 hits |
+| esophagus (19) | 5.3% | `set_41` re-included in denominator |
 
-**Router (geometry calibration):** k=2 clusters on slide `(total_tissue_area, dominance)` → thresholds. `router_constants.json` requires `"status": "calibrated"` or router uses module defaults (225k px / 0.92). On overlap, stub `overlap_unresolved` is written instead of stale numerics.
+**Signal gate verdict:** `GATE: SIGNAL_MISSING` — median gap **−0.305** (46 evaluable sets); 4.3% with gap &gt; 0. Provisional threshold 0.01 is Zeke’s working default, not mentor-approved. **Do not start Tier B** (z-score/router experiments) until gap distribution improves.
 
-**Yellow-tag policy:** Only `YELLOW_TAG_SET_IDS` (set 1) → yellow; MT white PERMASLIDE slides stay in calibration pool.
+**Verification (QR-claimed match):** 2/46 pass (4.3%) — production-shaped 1-vs-K; reported beside retrieval TPR in `verification_metrics.md`. No fixed “production OK” pass rate; ~1/30 misses tolerable while improving accuracy.
+
+**Strategic hypotheses (unvalidated):**
+- Block silhouette (~340k px) vs slide section (~8k px) may be **different geometry**, not scale — boundary Hu/Zernike may be the wrong cross-modal feature class.
+- Esophagus may be driven more by **fragment count** than constellation layout (test before heavy constellation tuning).
+- **Segmentation mask quality** may cap all matchers (audit overlays before algorithm churn).
+- Wrong top-1 may often be **same genotype + tissue** (biological siblings) — document as acceptable confound, not pure matcher failure.
+
+**Router (geometry calibration):** k=2 on slide `(area, dominance)`; provenance-gated `router_constants.json`.
+
+**Yellow-tag policy:** Only `YELLOW_TAG_SET_IDS` (set 1) → yellow; MT white PERMASLIDE slides in calibration pool.
 
 **What is built:**
 
@@ -120,9 +141,11 @@ matches are logged silently.
 | `phase3_calibration_notes.md` | Human-readable threshold derivation |
 | `router_constants.json` | Machine-readable constants for the router |
 
-**Phase 3 closeout artifacts:** `phase3_outputs/closeout_summary.md`, `ranking_failure_notes.md`, `router_constants.json` (provenance-gated), `pipeline_run/cross_modal_similarity.csv`.
+**Phase 3 closeout artifacts:** `closeout_summary.md`, `ranking_failure_notes.md`, `pipeline_run/cross_modal_similarity.csv`, `router_constants.json`.
 
-**Phase 4 entry (plan v2):** Start HSV implementation only if mentor approves parallel work **or** lungs TPR ≥ 23% **or** stain-only spike approved. See `phase3_outputs/mentor_closeout_email_draft.md`.
+**Active engineering plan:** `.cursor/specs/proposed_plan.md` — refresh for **Fix 1c** after design sign-off. Brainstorm (not the plan): `docs/superpowers/specs/2026-05-24-block-capture-roi-design.md`.
+
+**Phase 4 entry:** Gated on signal-gate outcome **and** mentor criteria (retrieval vs verification). Do not treat 46-way top-3 TPR as the only pass/fail definition of “working.”
 
 ### Phase 4 — End-to-End Integration ⏳ NOT YET STARTED
 Goals: HSV stain verification, two-phase batch workflow orchestration, exception report
@@ -170,6 +193,8 @@ def match_features_hungarian(descriptors_a: list, descriptors_b: list) -> dict:
 | Score combination | Per-row ranking within a single routing branch only | Absolute cross-branch scores are not comparable. Phase 2's tiny score separation (+0.012σ) confirmed ranking is the only valid approach. |
 | Stain verification | Deferred to Phase 4 | Secondary failure mode catcher; not core to shape matching. |
 | False-positive safety | System should err toward flagging uncertainty rather than passing a mismatch | A missed mismatch (false negative) is more dangerous than a false alarm in histology. |
+| Block ROI (Fix 1c) | Detection-based cassette; grid/label opposite ends; 3 geometry gates; Otsu-only blocks; geometric inset last resort flagged | Avoid fixed central-% crop and stacked AND gates that reject good frames; HSV weak on unstained silhouettes |
+| Fix 1c pilot gate | ≥7/10 visual audit on named pilot sets vs Fix 1b baseline | Do not use verification/gap to judge ROI pilot; regen 47 only after pilot passes |
 
 ---
 
@@ -295,12 +320,17 @@ LJI_blockcheck/
 
 ## 10. What Comes Next
 
-### Immediate — Phase 3 Closeout (Option B complete; mentor gate for Phase 4)
+### Immediate — Post signal gate (SIGNAL_MISSING)
 
-1. Send mentor email draft: `phase3_outputs/mentor_closeout_email_draft.md`
-2. Re-run after data fixes: `python code/phase3_contour_profile.py` → `python code/phase3_pipeline.py` → `python code/closeout_report.py`
-3. Regression: `pytest tests/ -v` · structural integration: `pytest tests/integration/test_phase3_cross_modal_ranking.py::test_phase3_pipeline_set_keyed_matrix -v`
-4. **Do not start Phase 4 HSV** until mentor gate A/B/C in plan v2
+**Completed (plan v2):** pipeline refresh (47 sets), score-gap report + histograms, verification metrics, segmentation audit overlays (`phase3_outputs/segmentation_audit/`), ranking failure census with genotype confound, esophagus fragment-count probe.
+
+**Next (signal / data, not router tuning):**
+1. Human REVIEW of segmentation audit overlays (`segmentation_audit/review.csv`).
+2. Pi rig / re-shoot candidates (`set_01` slide ceiling; any flagged masks).
+3. Feature-class experiments if masks look OK (block vs slide geometry hypothesis).
+4. Mentor email: median gaps, verification 4.3% vs retrieval 13% lungs — ask for data-driven gap cutoff.
+
+**Defer until median gap ≥ 0.01 (provisional):** z-scored matrix ranking, asymmetric router experiments, Tier C matcher work.
 
 ### Phase 4 — End-to-End Integration (gated)
 
@@ -369,6 +399,7 @@ flake8 code/ tests/
 - **Do not run integration tests by default.** `pytest.ini` excludes `tests/integration/` intentionally.
 - **Do not forget BGR→RGB conversion before matplotlib.** Silent wrong colors (Phase 1 regression).
 - **Do not forget `plt.close(fig)` after `fig.savefig()`.** Memory leak (Phase 1 regression).
-- **Do not move to Phase 4 until Phase 3 integration test passes.** Implementation ≠ validation.
+- **Do not move to Phase 4 until signal gate + mentor criteria are met.** High retrieval TPR is not the same as production verification.
+- **Do not invest in router/threshold tuning before score-gap histograms.** Gap &lt; ~0.01 means optimize data/features, not ranking.
 - **Dataset has no deliberate mismatches yet.** False-positive testing moves to Phase 4.
 - **Set 1 is a yellow-tag slide (APEX SAS).** Different label type; report its metrics separately from white-tag sets.

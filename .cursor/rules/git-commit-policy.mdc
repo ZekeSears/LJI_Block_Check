@@ -1,0 +1,28 @@
+---
+description: When the agent may git commit in this repo (milestones vs manual)
+alwaysApply: true
+---
+
+# Git commit policy (LJI blockcheck)
+
+## Default: Zeke commits manually
+
+- Do **not** commit after every edit or "large change."
+- Do **not** stage `phase3_outputs/` binaries, `iphone_images/`, `__pycache__/`, or `.pytest_cache/` unless Zeke asks.
+- Zeke controls history for learning and avoids noisy / accidental commits.
+
+## Agent may commit only when
+
+1. Zeke explicitly says **commit** (with or without a message hint), or
+2. Zeke approves a **named milestone** (e.g. "approved" on a design spec, "commit the design docs"), or
+3. A completed implementation plan task ends with a **Commit** step **and** Zeke said to follow the plan including commits.
+
+## Milestone commits (when allowed)
+
+- **Scope:** Only files for that milestone (specs, `.cursor/docs/PROJECT_CONTEXT.md`, `code/`, `tests/` — not full output regen trees).
+- **Message:** One or two sentences on **why** (e.g. `docs: approve Fix 1c block ROI design v2`).
+- **Never:** `git push` unless asked; never change git config; never `--no-verify` unless asked.
+
+## After milestone commit
+
+Run `git status` and tell Zeke what remains unstaged.
