@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT.md — LJI Histology Block-Check Pipeline
 
-> **Last updated:** 2026-05-25 (Fix 1d plastic-first block ROI)
+> **Last updated:** 2026-05-26 (Fix 1e brainstorming — rim + parallelogram anchor)
 > **Purpose:** Attach this file to every new Cursor chat with `@PROJECT_CONTEXT.md`.
 > It replaces the need to re-explain the project from scratch each session.
 > Update it when a phase closes or a major decision changes.
@@ -147,6 +147,7 @@ retrieval TPR and a usable verification gate are **not contradictory**.
 - ✅ **Fix 1c implemented** (2026-05-25): detection-based cassette, opposite short ends, 3 ROI gates + telemetry, Otsu-only blocks, production `allow_full_frame_fallback=False`.
 - ❌ Fix 1c pilot visual **1/10** (Zeke rubric) — only set_04; audit: `phase3_outputs/fix1d_roi_audit_report.md`
 - ✅ **Fix 1d implemented** (2026-05-25): plastic-first chain (phone: no `backlight_cc`), rows-then-morph paraffin, G4/G5 gates, deferred `ambiguous_orientation`, JSON constants + `calibrate_margin_strict.py`, audit `--analysis-fallback`. **Re-pilot required** (≥8/10 ROI rubric) before 47-set regen; closing Fix 1d ≠ signal-gate / Tier B unlock.
+- 📋 **Fix 1e brainstorming (2026-05-26, not implemented):** Cassette anchor via **backlit rim signature** (bright→dark→brighter through wall) + **parallelogram** (`minAreaRect` / 4-corner quad), not axis-aligned envelope. Design: `docs/superpowers/specs/2026-05-26-fix-1e-backlit-rim-parallelogram-anchor-design.md`. Calibration: `phase3_outputs/plastic_rim_clicks.json`, `plastic_rim_viability.md`.
 - ⏳ **Success bar:** functional verification **most of the time** on Pi captures — not mask perfection on full phone library
 - ⏳ Mentor alignment optional; Zeke policy in `mentor_questions.md`
 
@@ -196,7 +197,28 @@ retrieval TPR and a usable verification gate are **not contradictory**.
 
 **Phase 3 closeout artifacts:** `closeout_summary.md`, `ranking_failure_notes.md`, `pipeline_run/cross_modal_similarity.csv`, `router_constants.json`.
 
-**Active engineering plan:** `.cursor/specs/proposed_plan.md` — refresh for **Fix 1c** after design sign-off. Brainstorm (not the plan): `docs/superpowers/specs/2026-05-24-block-capture-roi-design.md`.
+**Active engineering plan:** `.cursor/specs/proposed_plan.md` — next synthesis target **Fix 1e** (planning gate). Brainstorm designs: `docs/superpowers/specs/2026-05-26-fix-1e-backlit-rim-parallelogram-anchor-design.md`, `docs/superpowers/specs/2026-05-25-fix-1d-roi-plastic-first-design.md`.
+
+### Fix 1e brainstorming — cassette anchor options (2026-05-26)
+
+**Problem:** Fix 1d telemetry improved; pilot visual ~**1/10**. Plastic gray alone fails (set_04 largest plastic CC **~3%** vs 15% gate). `paraffin_envelope` anchor ~**98%** image → ~**76%** cyan ROI; human corner quads ~**10%** (`plastic_rim_clicks.json`).
+
+| Anchor approach | Viable on iPhone pilots? | Fix 1e role |
+|-----------------|-------------------------|-------------|
+| Global plastic gray (80–135 or 26–99) | **Weak** — MIXED_PROFILE (span 88 gray); fragmented CC | Assist only, not sole anchor |
+| `paraffin_envelope` | **No** — oversize anchor | **Banned** on phone |
+| Dark frame + area 15–45% | **Yes** — coarse blob | Coarse localization + fallback |
+| Backlit rim B–D–B signature | **Mostly** — 2–4/4 edges; fails 06/31 | Primary boundary validator |
+| `minAreaRect` / 4-corner **parallelogram** | **Required** for rotation | Geometry output + audit overlay |
+| Hough / lines | Deferred — grid/label break lines | Not in 1e MVP |
+| Barcode-adjacent pose | N/A for silhouette-only shots | Out of scope |
+| Fixed Pi rig prior | **Best long-term** — narrows variance | Pi JSON after first rig batch |
+
+**Parallelogram decision:** User calibration tool draws **4-corner quads** (not image-axis AABB). Production should store `cassette_corners` + `cassette_angle_deg`; gates use **quad area** (~6–35% from clicks), not G5=90%. Tier A MVP: `minAreaRect` + optional `warpPerspective` for Otsu crop only.
+
+**ML / Hailo deferral:** Stay **classical** for Fix 1e. Hailo-8L remains **Phase 5+ optional** (PROJECT_CONTEXT §1). Consider ML only if classical pilot fails **twice** or mentor requests; training offline on Windows GPU does not block Phase 4. ML would replace/supplement mask generation only — downstream descriptors unchanged.
+
+**Recommended next step:** Planning gate (`proposed_plan.md` v1 → pre-mortem → v2) → implement Fix 1e classical stack; **do not** claim Fix 1e done until pilot ≥8/10.
 
 **Phase 4 entry:** Gated on signal-gate outcome **and** mentor criteria (retrieval vs verification). Do not treat 46-way top-3 TPR as the only pass/fail definition of “working.”
 
@@ -248,6 +270,7 @@ def match_features_hungarian(descriptors_a: list, descriptors_b: list) -> dict:
 | False-positive safety | System should err toward flagging uncertainty rather than passing a mismatch | A missed mismatch (false negative) is more dangerous than a false alarm in histology. |
 | Block ROI (Fix 1c) | Detection-based cassette; grid/label opposite ends; 3 geometry gates; Otsu-only blocks; geometric inset last resort flagged | Avoid fixed central-% crop and stacked AND gates that reject good frames; HSV weak on unstained silhouettes |
 | Fix 1c pilot gate | ≥8/10 visual audit on named pilot sets vs Fix 1b baseline | Do not use verification/gap to judge ROI pilot; regen 47 only after pilot passes |
+| Fix 1e anchor (brainstorm) | Rim signature + parallelogram + area law; no phone envelope | See `2026-05-26-fix-1e-backlit-rim-parallelogram-anchor-design.md`; ML deferred Phase 5+ |
 
 ---
 
