@@ -9,9 +9,11 @@ Usage (from repo root, venv active):
 
 Interactive keys:
   Left-click  = sample plastic pixel (green dot)
-  Right-click = sample ideal cassette corner (cyan dot)
+  Right-click = cassette corner in order (cyan quad, 4 clicks)
   n / Space   = next image
   p           = previous image
+  c           = clear corner clicks on this image
+  z           = undo last click (plastic or corner)
   s           = save clicks JSON + print pooled stats
   q / Esc     = quit
 
@@ -57,6 +59,8 @@ class ImageSession:
     bgr: np.ndarray
     plastic_clicks: list[tuple[int, int]] = field(default_factory=list)
     corner_clicks: list[tuple[int, int]] = field(default_factory=list)
+    # "plastic" | "corner" — order of clicks for undo (z)
+    click_history: list[str] = field(default_factory=list)
 
 
 def find_silhouette(set_id: int, image_dir: Path = IMAGE_DIR) -> Optional[Path]:
@@ -309,17 +313,17 @@ def run_interactive(sessions: list[ImageSession]) -> int:
         disp = sess.bgr.copy()
         for x, y in sess.plastic_clicks:
             cv2.circle(disp, (x, y), 8, (0, 255, 0), 2)
-        for x, y in sess.corner_clicks:
+        for i, (x, y) in enumerate(sess.corner_clicks):
             cv2.circle(disp, (x, y), 8, (255, 255, 0), 2)
+            cv2.putText(
+                disp, str(i + 1), (x + 10, y - 6),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2,
+            )
         if len(sess.corner_clicks) >= 2:
-            xs = [p[0] for p in sess.corner_clicks]
-            ys = [p[1] for p in sess.corner_clicks]
-            cv2.rectangle(
-                disp,
-                (min(xs), min(ys)),
-                (max(xs), max(ys)),
-                (255, 255, 0),
-                2,
+            pts = np.array(sess.corner_clicks, dtype=np.int32)
+            closed = len(sess.corner_clicks) >= 4
+            cv2.polylines(
+                disp, [pts], closed, (255, 255, 0), 2, cv2.LINE_AA,
             )
         label = (
             f"set_{sess.set_id:02d} ({idx + 1}/{len(sessions)}) "
@@ -334,12 +338,18 @@ def run_interactive(sessions: list[ImageSession]) -> int:
         sess = sessions[idx]
         if event == cv2.EVENT_LBUTTONDOWN:
             sess.plastic_clicks.append((x, y))
+            sess.click_history.append("plastic")
             s = sample_at(sess.bgr, x, y)
             print(f"  plastic @ ({x},{y}) gray={s['gray']} hsv={s['hsv']}")
         elif event == cv2.EVENT_RBUTTONDOWN:
+            if len(sess.corner_clicks) >= 4:
+                print("  corners full (4); press c to clear and redo")
+                return
             sess.corner_clicks.append((x, y))
+            sess.click_history.append("corner")
             s = sample_at(sess.bgr, x, y)
-            print(f"  corner @ ({x},{y}) gray={s['gray']}")
+            n = len(sess.corner_clicks)
+            print(f"  corner {n}/4 @ ({x},{y}) gray={s['gray']}")
 
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     cv2.setMouseCallback(win, on_mouse)
@@ -355,6 +365,23 @@ def run_interactive(sessions: list[ImageSession]) -> int:
         elif key == ord("p"):
             idx = (idx - 1) % len(sessions)
             print(f"-> set_{sessions[idx].set_id:02d}")
+        elif key == ord("c"):
+            sess = sessions[idx]
+            sess.corner_clicks.clear()
+            sess.click_history = [k for k in sess.click_history if k != "corner"]
+            print("  cleared corners on this image")
+        elif key == ord("z"):
+            sess = sessions[idx]
+            if not sess.click_history:
+                print("  nothing to undo")
+            else:
+                kind = sess.click_history.pop()
+                if kind == "plastic" and sess.plastic_clicks:
+                    x, y = sess.plastic_clicks.pop()
+                    print(f"  undo plastic @ ({x},{y})")
+                elif kind == "corner" and sess.corner_clicks:
+                    x, y = sess.corner_clicks.pop()
+                    print(f"  undo corner @ ({x},{y})")
         elif key == ord("s"):
             path = save_artifacts(sessions)
             print(f"Saved {path}")
@@ -418,8 +445,9 @@ def main() -> int:
         return 1
 
     print("Interactive calibration on iphone_images/")
-    print("  L-click = gray plastic rim   R-click = ideal cassette corners")
-    print("  n/space = next   p = prev   s = save   q = quit")
+    print("  L-click = gray plastic rim")
+    print("  R-click = cassette corners in order (1-4, draws quad)")
+    print("  n/space = next   p = prev   z = undo   c = clear corners   s = save   q = quit")
     for sess in sessions:
         print(f"  loaded set_{sess.set_id:02d}: {sess.path.name}")
     return run_interactive(sessions)
