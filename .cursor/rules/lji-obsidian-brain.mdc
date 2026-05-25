@@ -1,0 +1,41 @@
+---
+description: LJI Obsidian second brain — save Zeke's learnings and query vault before generic answers
+alwaysApply: true
+---
+
+# LJI Obsidian second brain
+
+**Vault path:** `C:\Users\zekes\Obsidian Vault\LJI Histology Project`
+
+## On learning / explanation chats
+
+When Zeke **states understanding** ("I learned…", "so that means…", "remember…", confirms a retain list):
+
+1. Run **`lji-wiki-save`** workflow (see `.cursor/skills/lji-wiki-save/SKILL.md`).
+2. File to the best matching note or `wiki/insights/`.
+3. One-line confirm: `Saved to [[Note Title]]`.
+
+Ask before saving only if the insight is ambiguous or contradicts an existing note.
+
+## On questions about prior learning
+
+When Zeke asks from memory, notes, or second brain ("what do I know about…", "from my Obsidian…", "what did I save…"):
+
+1. Run **`lji-wiki-query`** (`.cursor/skills/lji-wiki-query/SKILL.md`).
+2. Read `wiki/hot.md` → `wiki/index.md` → relevant pages.
+3. Answer in **his saved framing**; cite `[[wikilinks]]`.
+4. Use `PROJECT_CONTEXT.md` only for live repo status not in vault.
+
+## Explicit commands
+
+| Command | Action |
+|---------|--------|
+| `/save` | Save current answer (insight or synthesis) |
+| `/save insight [title]` | New `wiki/insights/` note |
+| `query quick: …` | hot + index only |
+
+## Do not
+
+- Skip vault read when Zeke references saved notes
+- Overwrite insights without merging
+- Store secrets or API keys in vault notes

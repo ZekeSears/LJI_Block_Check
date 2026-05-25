@@ -431,9 +431,8 @@ def run_pipeline(
 
     # Phase 1 helpers — imported lazily so unit tests that only use the
     # in-memory functions don't drag the Phase 1 module along.
-    from phase1_segmentation import (
-        parse_filename, load_image, segment_tissue,
-    )
+    from phase1_segmentation import parse_filename, load_image
+    import phase3_block_roi as p3roi
 
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -460,9 +459,12 @@ def run_pipeline(
         img = load_image(rec["path"])
         if img is None:
             continue
-        _gray, mask, _otsu = segment_tissue(img)
-        cleaned, contours = clean_mask(mask, role=rec["role"])
-        del mask, _gray
+        meta = {"role": rec["role"]}
+        if rec["role"] == "block":
+            meta["role"] = "block_silhouette"
+        seg = p3roi.segment_with_block_roi(img, meta, clean_mask)
+        cleaned = seg.cleaned_mask
+        contours = seg.contours
         if not contours:
             log.warning(
                 "No usable contours after cleaning: %s", rec["path"].name,

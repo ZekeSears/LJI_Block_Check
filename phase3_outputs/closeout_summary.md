@@ -11,11 +11,10 @@ Matrix shape: 47 blocks × 46 slides
 |--------------|------|-------|-----|
 | lung | 0 | 4 | 0.0% |
 | lungs | 3 | 23 | 13.0% |
-| esophagus | 1 | 18 | 5.6% |
+| esophagus | 1 | 19 | 5.3% |
 
 ## Notes
 
 - Sets with zero post-clean contours are excluded when absent from the matrix.
 - `lung` and `lungs` are reported separately.
 - Yellow-tag slides: APEX SAS adhesive (set 1 only); label mask before segmentation.
-- **TPR excluded sets** (metadata warning): set_41 (work-order mismatch pending lab confirmation).

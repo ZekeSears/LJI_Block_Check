@@ -7,8 +7,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import phase3_block_roi as p3roi
 import phase3_label_detection as p3ld
 import phase3_pipeline as p3pl
+from phase3_block_roi import SegmentationWithRoi
 
 
 def test_process_image_calls_label_mask_before_segmentation(monkeypatch, tmp_path):
@@ -18,13 +20,20 @@ def test_process_image_calls_label_mask_before_segmentation(monkeypatch, tmp_pat
         order.append("mask")
         return img
 
-    def fake_seg(img: np.ndarray):
+    def fake_seg(img: np.ndarray, meta, clean_mask_fn):
         order.append("seg")
-        gray = np.zeros((100, 100), dtype=np.uint8)
         mask = np.zeros((100, 100), dtype=np.uint8)
         cv2 = pytest.importorskip("cv2")
         cv2.circle(mask, (50, 70), 25, 255, -1)
-        return gray, mask, 128
+        c = np.array([[45, 65], [55, 65], [55, 75], [45, 75]], dtype=np.int32)
+        return SegmentationWithRoi(
+            cleaned_mask=mask,
+            contours=[c.reshape(-1, 1, 2)],
+            otsu_threshold=128,
+            roi_detection_ok=True,
+            roi_bbox=(0, 0, 100, 100),
+            crop_origin=(0, 0),
+        )
 
     def fake_load(_path: Path):
         img = np.full((100, 100, 3), 240, dtype=np.uint8)
@@ -36,7 +45,7 @@ def test_process_image_calls_label_mask_before_segmentation(monkeypatch, tmp_pat
     import phase2_descriptors as p2
 
     monkeypatch.setattr(p3ld, "apply_label_mask", fake_mask)
-    monkeypatch.setattr(p3pl, "segment_tissue", fake_seg)
+    monkeypatch.setattr(p3roi, "segment_with_block_roi", fake_seg)
     monkeypatch.setattr(p3pl, "load_image", fake_load)
     monkeypatch.setattr(
         p2,

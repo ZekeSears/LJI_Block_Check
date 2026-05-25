@@ -17,6 +17,9 @@ iphone_images.zip
 phase1_outputs/
 phase2_outputs/visualizations/
 phase3_outputs/calibration_histograms/
+phase3_outputs/pipeline_run/visualizations/
+phase3_outputs/roi_crop_audit/
+phase3_outputs/segmentation_audit/
 
 # Optional: active planning drafts (templates stay in .cursor/specs/README.md)
 # .cursor/specs/proposed_plan.md
