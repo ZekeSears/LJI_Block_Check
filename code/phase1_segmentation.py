@@ -45,51 +45,6 @@ MORPH_KERNEL_SIZE = 5
 KNOWN_STAINS = {"HE", "MT", "PAS", "PSRFG", "SMA"}
 KNOWN_ROLES = {"block", "slide", "reference"}
 
-# ---------------------------------------------------------------------------
-# Set metadata — read manually from slide/block barcode labels.
-# Maps the set prefix (e.g. "set_01") to the real sample identity so
-# every file in a set (slide, block silhouette, block barcode) shares the
-# correct sample_label and stain.
-# ---------------------------------------------------------------------------
-SET_METADATA = {
-    "set_01": {
-        "sample_label": "TWKOB5_lungs",
-        "stain": "MT",
-        "wo": "7842",
-        "block_id": "",       # set 01 has no barcode image
-    },
-    "set_02": {
-        "sample_label": "WT3_lungs",
-        "stain": "HE",
-        "wo": "7842",
-        "block_id": "1382",
-    },
-    "set_03": {
-        "sample_label": "TWKO4_esophagus",
-        "stain": "HE",
-        "wo": "7842",
-        "block_id": "1377",
-    },
-    "set_04": {
-        "sample_label": "WT2_lungs",
-        "stain": "HE",
-        "wo": "7842",
-        "block_id": "1381",
-    },
-    "set_05": {
-        "sample_label": "WT5_esophagus",
-        "stain": "HE",
-        "wo": "7842",
-        "block_id": "1373",
-    },
-    "set_06": {
-        "sample_label": "TWKO5_lungs",
-        "stain": "SMA",
-        "wo": "7842",
-        "block_id": "1389",
-    },
-}
-
 OTSU_LOW_WARN = 10                # warn if Otsu picks below this
 OTSU_HIGH_WARN = 245              # warn if Otsu picks above this
 HEURISTIC_FRACTION_UPPER = 0.5    # tissue_fraction PASS upper bound (inclusive)
@@ -130,15 +85,13 @@ def parse_filename(filepath: Path) -> dict:
         Example: IMG_3084_block_WT5_lungs.jpg
                  IMG_3084_slide_WT5_lungs_HE.jpg
 
-    Convention B (cropped set pairs):
-        <set_id>_<role>[_<detail>].<ext>
-        Example: set_01_block_silhouette.jpeg  (block on backlight)
-                 set_01_slide.jpeg             (slide on backlight)
-                 set_02_block_barcode.jpeg     (block barcode photo)
+    Convention B (set-prefixed pairs; metadata in filename tokens):
+        <set_id>_<role>_<detail>_<tissue>_<stain>_<genotype>_<workorder>.<ext>
+        Example: set_01_block_silhouette_lung_MT_TWKOB4.jpeg
+                 set_02_slide_lungs_HE_WT3_WO7842.jpeg
 
-    For convention B files whose prefix matches SET_METADATA, the real
-    sample_label and stain are pulled from the metadata table so all
-    files in a set share the correct identity.
+    Short legacy names (e.g. set_06_block_silhouette.jpeg) still parse;
+    sample_label falls back to the set prefix when tissue/stain tokens are absent.
 
     image_type is one of: "silhouette", "barcode", "slide", "block".
     """
@@ -178,18 +131,7 @@ def parse_filename(filepath: Path) -> dict:
         image_type = "silhouette"
         remainder = remainder[1:]
 
-    # --- Convention B: look up real identity from SET_METADATA ---
-    if prefix in SET_METADATA:
-        meta = SET_METADATA[prefix]
-        return {
-            "role": role,
-            "sample_label": meta["sample_label"],
-            "stain": meta["stain"],
-            "is_reference": (role == "reference"),
-            "image_type": image_type,
-        }
-
-    # --- Convention A: parse sample_label and stain from filename ---
+    # Parse sample_label and stain from filename tokens after role/detail.
     stain = ""
     if remainder and remainder[-1] in KNOWN_STAINS:
         stain = remainder[-1]
@@ -198,7 +140,7 @@ def parse_filename(filepath: Path) -> dict:
     if remainder:
         sample_label = "_".join(remainder)
     elif role == "slide":
-        # Convention B slide with no SET_METADATA entry — use prefix
+        # Set-prefixed slide with no trailing tokens — use prefix
         sample_label = prefix
     else:
         sample_label = prefix
