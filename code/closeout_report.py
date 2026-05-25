@@ -23,8 +23,8 @@ DEFAULT_MATRIX = REPO_ROOT / "phase3_outputs" / "pipeline_run" / "cross_modal_si
 DEFAULT_IMAGES = REPO_ROOT / "iphone_images"
 DEFAULT_OUT = REPO_ROOT / "phase3_outputs" / "closeout_summary.md"
 
-# Excluded from TPR denominator until lab confirms pairing (plan v2 set_41 default).
-TPR_EXCLUDED_SET_IDS: frozenset[int] = frozenset({41})
+# Sets excluded from TPR denominator (empty after plan v2 set_41 re-inclusion).
+TPR_EXCLUDED_SET_IDS: frozenset[int] = frozenset()
 
 
 def _import_eval():
