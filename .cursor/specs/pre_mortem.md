@@ -1,9 +1,9 @@
 # Adversarial Architecture Review: Pre-Mortem Audit
 
 > **Status:** Critical Review Completed — Actions Required
-> **Target Document:** `.cursor/specs/proposed_plan.md` (Draft v3, 2026-05-24)
-> **Date:** 2026-05-24
-> **Domain Detected:** Embedded CV / Data Pipeline (histology image validation closeout)
+> **Target Document:** `.cursor/specs/proposed_plan.md`
+> **Date:** 2026-05-25
+> **Domain Detected:** Embedded CV (OpenCV block ROI on phone/Pi backlit histology captures)
 
 ---
 
@@ -14,108 +14,126 @@ contain these sections. Flag any that are missing or insufficient:
 
 | Required Section | Present? | Notes |
 |-----------------|----------|-------|
-| Objective | ✅ | Clear baseline state (13% lungs / 5.3% esophagus), Option B closeout, Phase 4 gate |
-| Architecture & Pipeline Steps | ✅ | Eight ordered steps; Steps 1–2 and partial 5–7 remain |
-| Data Flow (Inputs/Transformations/Outputs) | ✅ | Artifact paths enumerated through Phase 4 handoff |
-| Key Decisions & Rationale | ✅ | Metrics-only routing, geometry calibration, mentor gate |
-| Dependencies | ✅ | Stack and dataset listed |
-| Open Questions & Known Risks | ✅ | Overlap persistence, set_01, esophagus regression acknowledged |
-| Testing Considerations | ✅ | Table with pass criteria; label-mask test called out as new |
+| Objective | ✅ | Clear failure mode (1/10 pilot), Fix 1d scope, ≥8/10 gate, no 47-set regen until pilot |
+| Architecture & Pipeline Steps | ✅ | 12 ordered steps; phone vs Pi chain divergence documented |
+| Data Flow (Inputs/Transformations/Outputs) | ✅ | Present but thin — no explicit `SegmentationWithRoi` field list or failure enum |
+| Key Decisions & Rationale | ✅ | Table present; several cells reference "v2 mitigation" before this pre-mortem exists |
+| Dependencies | ✅ | Minimal (opencv, numpy, pytest) — omits pandas/CSV consumers if contour profile regen is in scope |
+| Open Questions & Known Risks | 🟡 | Only two bullets; understates meta/calibration and signal-gate coupling |
+| Testing Considerations | ✅ | Named tests + pilot geometry script + visual rubric |
 
-The plan is structurally complete. Two substantive gaps remain in the written spec: (1) **Step 3 does not define how geometry clusters become the two scalar router thresholds** (`SLIDE_TOTAL_TISSUE_AREA_PX`, `DOMINANCE_MIN_FOR_SHAPE`), and (2) **Step 8 Phase 4 entry criteria use “measurably” without a numeric threshold** while the 80% mentor gate is explicitly not met.
+**Structural concern:** §10 "Pre-mortem checklist (v2 resolved)" embeds resolved 🔴 items inside a **Draft v1** plan pending pre-mortem. That creates false confidence — downstream agents may skip checklist items assuming they are already mitigated. Plan v2 must either remove §10 or re-derive mitigations from this audit.
+
+---
 
 ## 1. Positive Architectural Notes
 
-- **Option B closeout is the right honesty policy:** Documenting 13% / 5.3% TPR with xfail retained avoids fake green tests and matches PROJECT_CONTEXT’s ranking-only acceptance philosophy.
-- **Removing filename tissue from routing is architecturally consistent:** The user requirement is explicit; keeping tissue tokens for reporting-only (`lung` / `lungs` / `esophagus` split in `closeout_summary.md` and integration tests) is the correct separation of concerns.
-- **Step ordering is sound:** Data hygiene → calibration → label mask → re-run → failure analysis → targeted tweaks → docs → Phase 4 gate avoids tuning the router on poisoned or degenerate inputs.
+- **Pilot-before-regen discipline** is correct and aligned with PROJECT_CONTEXT: ROI quality must not be judged by 46-way retrieval TPR or verification gap while `SIGNAL_MISSING` persists.
+- **Phone disables `backlight_cc`** directly targets the audit finding that weak perimeter glow mis-triggers full-frame paths on iPhone JPEGs — a concrete, testable policy split by `capture_source`.
+- **Production vs audit fallback separation** (`allow_full_frame_fallback` audit-only, PNG title `fallback=analysis`) preserves the Fix 1c safety posture and avoids silent full-frame production passes.
+
+---
 
 ## 2. Fatal Assumptions
 
-- **🔴 Geometry Clustering Will Unlock Separable Router Thresholds:** Step 3 assumes that splitting the calibration pool by dominance + contour count (or k-means on `[total_area, dominance, contour_count]`) will produce non-overlapping thresholds where the **tissue-filename split failed**. On the live 47-set library, `phase3_calibration_notes.md` already records hybrid sanity **FAIL** with slide `total_tissue_area` medians of ~8,428 px (lungs) vs ~6,848 px (esophagus) — close enough that `derive_high_low_separation_threshold()` sets `overlap=True` and exits 1. Clustering on the same three features without tissue labels does not magically widen separation; it only relabels the same overlapping point cloud. **Failure scenario:** Step 3 completes, overlap persists, implementation agent writes “provisional constants” from stale `router_constants.json` (224,998 px / 0.943 dominance from a prior run), re-runs pipeline, and esophagus TPR stays near 5% — no path to Phase 4 improvement is defined.
+- **🔴 Plastic bbox is the right spatial anchor:** The plan chains paraffin row/morph logic inside a **plastic_frame** detection bbox, citing audit coverage "44/47" without reproducing detection criteria in the plan. If `plastic_frame` false-positives on glare, label plastic, or partial cassette visibility (common on phone JPEGs), the paraffin window is shifted before G4/G5 ever run — identical failure class to Fix 1c's cassette localization regression. **When it breaks:** set_02/set_33 tests pass on one frame but pilot fails on adjacent captures; geometry script flags slit/flood on sets that passed unit tests.
 
-- **🔴 Stale `router_constants.json` Serves While Calibration Fails:** `run_calibration()` skips `write_router_constants_json()` when `hybrid_overlap` is true (lines 743–746 in `phase3_contour_profile.py`), but `phase3_router.py` loads whatever JSON exists at import with no freshness or provenance check. Current artifacts are inconsistent: notes say thresholds **not derived**, yet `router_constants.json` still holds numeric values. **Failure scenario:** Step 3 exits 1; pipeline and integration tests run in fresh processes and silently use outdated constants derived under the old tissue-pool split — TPR comparisons before/after Step 3 are meaningless.
+- **🔴 Strict margin threshold generalizes across the 47-set phone library:** Step 2 requires `MARGIN_STRICT_MIN_PERIM_FRAC` (phone "high; e.g. 0.05+") but the plan does not bind this to measured perimeter statistics from `contour_profile.csv` or a calibration script output. **When it breaks:** unstained blocks with dim edges never reach `has_strong_margin` on Pi (acceptable) but phone chain also loses valid frames if perimeter metric is computed on downscaled or JPEG-compressed edges — `plastic_frame` runs on crops that still include label/grid clutter.
 
-- **🟡 Metrics-Only Routing Can Recover Esophagus TPR Without New Signals:** The plan documents esophagus TPR falling from ~43% (tissue-biased router) to 5.3% (metrics-only) and treats Step 3 threshold retune as the fix. Router logic in `route_comparison_hybrid()` returns `"shape"` when **either** side hits `side_prefers_shape()` unless **both** sides hit constellation — asymmetric OR bias. Overlapping slide metrics mean many esophagus pairs route to shape matching, where constellation was designed to help. Step 5 failure analysis may confirm this, but Steps 3–6 do not authorize any routing-logic change if overlap persists — only threshold retune and data fixes. **Failure scenario:** All allowed steps complete; esophagus stays mis-routed; plan declares “improvement path documented” without actual improvement.
+- **🔴 ROI correction unlocks downstream matching without touching segmentation:** Steps 9–10 keep frozen `segment_tissue()` and only add post-Otsu `seg_*` gates. PROJECT_CONTEXT already states median score gap is **−0.305** and verification pass is **4.3%**. A tighter ROI that passes visual rubric may still yield masks with tiny tissue fraction or label bleed — ranking and verification will remain `SIGNAL_MISSING` unless audit overlays improve. **When it breaks:** pilot ≥8/10 achieved, 47-set regen run, gap histogram unchanged → wasted regen cycle and false milestone closure.
+
+---
 
 ## 3. Algorithmic & Logic Vulnerabilities
 
-- **🔴 Step 3 Cluster→Threshold Mapping Is Undefined:** The plan lists k-means or dominance/count split as options but never specifies: (a) how many clusters, (b) which cluster maps to “prefer shape” vs “prefer constellation”, (c) how cluster boundaries become `SLIDE_TOTAL_TISSUE_AREA_PX` and `DOMINANCE_MIN_FOR_SHAPE`, or (d) what to do when clusters overlap in the 2D (area, dominance) projection. The existing helper `derive_high_low_separation_threshold()` expects two populations with lung_median > esophagus_median — geometry clusters are not guaranteed to align with that semantics. Implementing Step 3 without this mapping is guesswork.
+- **🔴 Opposite-end strip + deferred `ambiguous_orientation`:** Step 7 applies strip only when short-end score delta >10%; otherwise `strip_method=none`, and `ambiguous_orientation` triggers only when aspect is near-square **and** morph failed **and** scores tied. Sets 02/33 are explicit regression targets — tie-breaking without strip can leave grid/label energy on one short end, failing plastic-first intent. Conversely, a marginal >10% delta on noisy phone JPEGs can strip the wrong end on square-ish cassettes.
 
-- **🟡 Calibration Code Still Splits on `tissue_class` (Plan/Code Drift):** Step 3 says “not by tissue filename,” but `run_calibration()` lines 693–710 still build pools with `tissue_class == "lung"` vs `"esophagus"` (with `lungs` collapsed to `lung`). An agent implementing “geometry clusters” must replace this block entirely; the plan does not name the new function, its inputs, or its overlap test. Risk of partial edit leaving tissue split in place while claiming geometry calibration.
+- **🟡 G4 (`roi_sliver`, h ≥15% inner) vs G5 (`roi_oversize`, area ≤90%):** Gates are directionally right for audit failures (06/11 slits, full-frame class) but 15% height is a single scalar across lung and esophagus layouts. Esophagus blocks with wide shallow wax pools may fail G4 while still looking correct to a human; lung sets with legitimate tall wax may pass G4 yet still flood Otsu. Plan allows 12% tune "only if wax visually correct" — that defers a **classification** decision to post-hoc pilot, not a measured rule.
 
-- **🟡 Label Mask Not Wired Despite Being on the Critical Path:** Step 4 requires `detect_label_region()` → mask before `segment_tissue()` for yellow/MT slides. Today `phase3_pipeline._process_image()` calls `segment_tissue()` then `clean_mask()` only; `phase3_label_detection.py` is never imported by pipeline or unified matcher. Set 1 slide still records `contour_count=0` / `no_contours` in `contour_profile.csv`. Until Step 4 lands, set_01 and any MT slide with label-dominated segmentation are excluded from the matrix — denominator manipulation by omission, not documented miss.
+- **🟡 `capture_source` default `phone`:** Step 1 loads JSON by meta with default `phone`. Any pipeline path that omits `capture_source` on Pi captures will permanently disable `backlight_cc` and apply phone margins on production hardware — wrong chain with no runtime error.
 
-- **🟡 `set_41` Work-Order Mismatch Is Evaluable Today:** `audit_set_inventory.py` records `work_order_mismatch:['WO7482', 'WO7842']` as a **warning**, not blocking; `evaluable=True` in `set_inventory_audit.csv`. Block is HE/WO7842 lineage; slide is MT/WO7482. The pair enters the 47×46 matrix under the same `set_41` key — ranking metrics measure cross-work-order mismatch, not matcher quality. Step 2 mentions this set but does not require exclude-from-eval or blocking until lab confirms.
+- **🟡 Post-Otsu `seg_blob` (esophagus only):** Tissue-class gating assumes `tissue_class` in meta is reliable and consistent with filename tokens used only for reporting elsewhere. Mis-labeled meta routes lung floods through without `seg_blob`, or esophagus through with false blob fails.
 
-- **🟡 MT Stain → Yellow Label Inference May Mis-Pool Calibration:** `label_type_from_meta()` treats all MT slides as yellow-tag for calibration eligibility. The expanded library has many MT sets (34–47) on white PERMASLIDE-style captures, not APEX SAS yellow adhesive. Excluding them from the white HE calibration pool is correct; mis-tagging them as yellow and excluding from threshold pool while also skipping label-mask processing conflates two different physical slide types under one enum.
+- **🟢 Row projection vs morph paraffin (`paraffin_method=rows|morph`):** Logging method is good for telemetry; plan does not specify selection order or failure handoff when both disagree inside the same plastic bbox — debugging will require manual PNG review per set.
 
-- **🟢 Router Constants Loaded Once at Import:** `_load_router_constants()` runs at module import in `phase3_router.py`. Re-calibration in Step 3 updates JSON on disk; any in-process reload without a fresh interpreter serves stale globals. Fresh subprocess pipeline runs (Step 5) are safe; interactive notebook debugging is not.
+- **🟢 Constants cache at module init:** Tests that mutate JSON or env must call an explicit reload hook; plan mentions reload for tests but does not require a public `reload_block_roi_constants()` — risk of order-dependent pytest flakes.
+
+---
 
 ## 4. Resource & Environment Constraints
 
-- **🟡 Full 47×46 Pipeline Re-Run Required After Each Step 3/4 Change:** Each calibration or label-mask iteration re-segments ~140 JPEGs and runs ~2,150 cross-modal comparisons (segmentation + routing + branch-specific matching). Step 5’s “sample 3 hits and 3 misses” still assumes a fresh matrix exists. Plan mentions 7–15 min integration runs but no artifact-reuse policy — three Step 3 retune attempts ≈ 30–45 min of laptop time with no parallelization on Pi 5 target.
+- **🟡 Real JPEG integration tests:** Plan mandates `test_set02_set33_roi_ok_plastic`, `test_roi_sliver_rejects_set06_class`, etc. on "real JPEG 06 or synthetic." `iphone_images/` is gitignored — CI and fresh clones may run **synthetic-only**, giving false green while pilot fails on compression/white-balance artifacts. **Done when:** tests skip with explicit reason if assets missing, or minimal committed fixtures under `tests/fixtures/roi/`.
 
-- **🟡 Manual Step 5 Does Not Scale to 47 Sets:** `ranking_failure_notes.md` from 18 manual samples (3×3 per tissue bucket × 2 buckets, plus lung’s 4 sets) may miss systematic failure modes affecting the 13% lungs figure. Acceptable for closeout documentation, not for threshold derivation.
+- **🟡 Pilot geometry leaf script:** `pilot_roi_geometry_check.py` is pre-visual and audit-only — acceptable as leaf, but if slit/flood heuristics diverge from G4/G5 thresholds, Zeke reviews two conflicting signals. Align geometry script thresholds with JSON constants or generate flags from the same functions.
 
-- **🟢 Windows Dev vs Pi 5 Deployment:** Current library is iPhone JPEGs at ~3024×3024; memory per image is manageable on dev hardware. No Pi-specific memory release audit is required for this plan’s scope (batch offline, not live capture).
+- **🟢 Pi 5 / Arducam path not exercised:** `block_roi_constants_pi.json` stub until hardware batch — memory and timing are non-issues for offline pytest; **runtime** risk is first-field mismatch between phone-tuned plastic thresholds and Pi FOV/exposure (300mm WD, ~100mm FOV per PROJECT_CONTEXT).
+
+- **🟢 OpenCV matrix lifecycle:** Plan does not repeat Fix 1c explicit `del`/`release` discipline; multiple morph + projection passes per frame on Pi remain bounded for single-frame capture but should not leak across batch regen loops.
+
+---
 
 ## 5. Testing Gaps
 
-- **🔴 No Test for Geometry-Based Threshold Derivation (Step 3 Core):** Plan says “TDD for new threshold derivation helper first,” but no test file or fixture is specified. Required: synthetic slide-metric rows where clusters are separable → helper returns two thresholds + exit 0; overlapping rows → overlap flag + no JSON write + explicit stale-json invalidation policy.
+- **🔴 No test that plastic-first chain fails closed when `plastic_frame` is absent:** Cassette chain lists `plastic_frame → dark_frame → paraffin_envelope → geometric_inset` but tests name golden set_04 and slit/oversize — not "all methods failed → empty ROI + telemetry reason."
 
-- **🔴 No Test for Label-Mask-Before-Segmentation Path (Step 4):** Testing table lists “synthetic yellow-slide fixture → contours > 0 after mask.” `detect_label_region()` has unit tests, but nothing asserts pipeline wiring. Without it, Step 4 can be “implemented” in label_detection only while pipeline still skips it.
+- **🟡 No test for wrong `capture_source` on Pi-bound image:** Only `test_phone_never_backlight_cc`; missing inverse guard that `capture_source=pi` **may** use `backlight_cc` when `has_strong_margin`.
 
-- **🟡 Stale JSON / Overlap Exit-Code Policy Untested:** When calibration exits 1, nothing verifies that router does **not** load unproven constants, or that `phase3_calibration_notes.md` and JSON provenance stay in sync. A regression test should assert: overlap run → JSON absent or marked `"provenance": "provisional_overlap"` → router falls back to documented defaults only.
+- **🟡 Pilot set list and rubric not in plan:** Acceptance requires Zeke visual ≥8/10 but plan does not enumerate the 10 pilot set IDs or per-set pass criteria (wax window vs tissue visibility vs label exclusion). Regression to 1/10 is undetectable without a frozen checklist file.
 
-- **🟡 Phase 4 Entry Gate Not Encoded in Tests:** Step 8 criteria (mentor parallel OR lungs TPR improvement vs 13%) have no pytest or script guard. An agent could start Phase 4 HSV work while integration xfail still reflects sub-baseline ranking.
+- **🟡 Geometry script vs visual gate:** §9 requires geometry script "no slit/flood flags on ≥8 sets" before visual — no definition of which ≥8 sets (same as pilot 10? subset?). Mismatch allows visual work on sets geometry already flagged.
 
-- **🟡 `set_41`-Class Metadata Warnings Not Gating TPR:** Audit detects work-order mismatch; integration/closeout do not exclude warned sets unless manually filtered. Need test or closeout rule: “warned-but-evaluable sets listed separately in TPR table.”
+- **🟡 Contour profile regen after pilot:** Listed as acceptance #4 but no test that new telemetry columns (`strip_method`, `capture_source`, `paraffin_method`) round-trip into `contour_profile.csv` without breaking router consumers.
 
-- **🟢 Separate `lung` / `lungs` / `esophagus` TPR Tests Exist:** `test_phase3_cross_modal_ranking.py` and `closeout_report.py` already split tokens — prior v2 gap is resolved.
+- **🟢 `test_seg_flood_set28_class`:** Good production-path guard; ensure synthetic mask frac >0.85 matches set_28 failure mode from audit narrative, not an arbitrary threshold.
+
+---
 
 ## 6. Pre-Implementation Checklist
 
 ### 🔴 Critical (must resolve before writing any code)
 
-- [ ] **Define cluster→threshold algorithm for Step 3:** Specify how geometry clusters (or dominance/count split) produce `SLIDE_TOTAL_TISSUE_AREA_PX` and `DOMINANCE_MIN_FOR_SHAPE`, including overlap detection and fallback when k-means clusters interleave in (area, dominance) space. **Done when:** `proposed_plan.md` Step 3 has a numbered sub-algorithm; unit test passes on separable synthetic data and fails overlap on known 47-set statistics.
+- [ ] **Remove or rewrite plan §10 "v2 resolved" pretense:** Plan v2 must map each 🔴 below to an explicit step/constant/test — not claim pre-resolution. **Done when:** `proposed_plan.md` v2 §10 is deleted or replaced with pointers to this §6 checklist items marked mitigated.
 
-- [ ] **Stale JSON invalidation on calibration failure:** When `hybrid_overlap` is true, either delete `router_constants.json`, write a explicit `"status": "overlap_unresolved"` stub, or force router to ignore JSON unless `"calibration_exit": 0`. **Done when:** test confirms overlap run does not load prior numeric thresholds; pipeline logs which constants are active.
+- [ ] **Lock phone `MARGIN_STRICT_MIN_PERIM_FRAC` from data:** Measure perimeter bright fraction on block silhouettes in calibration CSV or a one-off script; document value in `block_roi_constants_phone.json` with source row stats. **Done when:** JSON field exists, loader test asserts value, and notes cite min/median of measured distribution — not "e.g. 0.05+".
 
-- [ ] **Remove tissue-class split from calibration implementation:** Replace lines 693–710 pool logic in `phase3_contour_profile.py` with the Step 3 geometry helper — no `tissue_class == "lung"` gate for threshold derivation. **Done when:** calibration notes no longer say “Primary routing uses tissue in filename”; code grep shows zero tissue-class use in threshold derivation path.
+- [ ] **Define plastic_frame acceptance on pilot 10 sets:** Document detection rule (color/edge thresholds) and expected bbox IoU or visual pass per set before coding paraffin window. **Done when:** design spec subsection or plan v2 table lists pass/fail per pilot set ID for plastic bbox alone.
 
-- [ ] **Wire label mask in pipeline (Step 4):** For `label_type == "yellow"` slides, call `apply_label_mask()` (or equivalent) on BGR **before** `segment_tissue()` in `_process_image()`. **Done when:** set_01 slide produces contours > 0 in contour_profile re-run OR is documented excluded with mentor sign-off; synthetic yellow fixture test passes through pipeline path.
+- [ ] **Fail-closed cassette chain test:** When all cassette methods fail, ROI returns empty/`roi_ok=False` with `failure_reason` — never silent full frame in production. **Done when:** pytest asserts production path with `allow_full_frame_fallback=False` yields empty mask and explicit reason string.
 
-- [ ] **`set_41` eval policy:** Resolve WO7842 vs WO7482 with lab; until resolved, exclude `set_41` from TPR denominator with documented reason or mark audit warning as blocking. **Done when:** `set_inventory_audit.csv` shows `evaluable=False` for set_41 OR closeout table has footnote excluding it.
+- [ ] **Freeze pilot set IDs + rubric artifact:** Enumerate 10 (or N) set IDs, rubric dimensions (wax framing, label/grid exclusion, tissue visible), and fail policy. **Done when:** `phase3_outputs/pilot_roi_rubric.md` or equivalent exists and is referenced in plan v2 §9.
+
+- [ ] **Align geometry pre-check with G4/G5:** `pilot_roi_geometry_check.py` must call shared gate functions or read same JSON keys. **Done when:** one set_06-class synthetic triggers both geometry script flag and `test_roi_sliver_rejects_set06_class` failure.
+
+- [ ] **Real-image test policy:** Committed minimal fixtures OR skip-if-missing with `pytest.mark` and CI documentation. **Done when:** `pytest tests/test_phase3_block_roi.py` behavior documented in plan v2; no silent synthetic substitution without marker.
 
 ### 🟡 Moderate (must resolve during implementation)
 
-- [ ] **Define “measurably” for Phase 4 entry (Step 8):** e.g. lungs TPR ≥ 13% + 10 pp, or any esophagus improvement with mentor sign-off. **Done when:** numeric threshold or explicit “mentor letter only” path in plan §8.
+- [ ] **`capture_source` propagation audit:** Every block silhouette entry point sets meta from filename or sidecar; default documented. **Done when:** grep-backed checklist in plan v2 or test that pipeline inventory CSV includes `capture_source` for all block rows.
 
-- [ ] **MT vs yellow-tag visual confirmation:** Do not rely on stain token alone for `label_type`; spot-check MT sets 34–47 slide photos against APEX SAS vs PERMASLIDE. **Done when:** `YELLOW_TAG_SET_IDS` or `label_type_from_meta()` rules updated; calibration notes list yellow vs white MT counts.
+- [ ] **Opposite-end strip regression:** set_02 and set_33 real/synthetic tests assert `strip_method != none` when delta >10%, and `ambiguous_orientation` not set on success path. **Done when:** named tests pass and telemetry columns populated.
 
-- [ ] **Degenerate-set denominator rule (documented):** Closeout already says zero-contour sets excluded when absent from matrix — extend to label-mask failures. **Done when:** `closeout_summary.md` lists excluded set IDs and whether exclusion counts as miss or omit.
+- [ ] **Constants loader + reload:** `test_load_phone_constants` and test-only reload after JSON edit. **Done when:** two tests green; flake8 clean.
 
-- [ ] **Post-calibration fresh-process rule:** Document that Step 5 pipeline and integration must run in new Python process after Step 3/4. **Done when:** execution order in plan §8 mentions process restart.
+- [ ] **Post-Otsu production fail path:** `seg_flood` / `seg_empty` / esophagus `seg_blob` set `reshoot_recommended` without invoking audit fallback. **Done when:** pytest on production flag path; PNG title never `fallback=analysis`.
 
-- [ ] **Update stale artifacts:** `phase3_calibration_notes.md` and `PROJECT_CONTEXT.md` §4 still describe tissue-metadata routing and 23-set baselines. **Done when:** Step 7 complete with 47-set metrics-only numbers.
-
-- [ ] **Ranking failure analysis deliverable:** Step 5 output `ranking_failure_notes.md` should classify at least: wrong route vs wrong score vs degenerate segmentation, with set IDs. **Done when:** file exists and references `routing_log.csv` decisions for sampled sets.
+- [ ] **Signal-gate expectation documented in milestone:** Closing Fix 1d does not imply Tier B or Phase 4 unlock. **Done when:** PROJECT_CONTEXT §4 update states pilot pass ≠ gap improvement until regen + histogram reviewed.
 
 ### 🟢 Minor (address as encountered)
 
-- [ ] **Fix `phase3_pipeline.py` module docstring:** Still says routing uses “tissue metadata” — misleading for metrics-only v3. **Done when:** docstring matches router behavior.
+- [ ] **Public `reload_block_roi_constants()` for tests:** Avoid module-level stale cache. **Done when:** function exists and used in at least one test.
 
-- [ ] **Integration artifact reuse (optional):** Document whether Step 5 reuses `phase3_outputs/pipeline_run/` or always runs fresh. **Done when:** one-line policy in plan or test docstring.
+- [ ] **Contour profile column contract:** Document new CSV columns and router ignore list. **Done when:** `phase3_calibration_notes.md` snippet in same PR as regen.
 
-- [ ] **Router reload helper (optional):** Expose `_load_router_constants()` for REPL/notebook use after calibration. **Done when:** function callable without process restart, or documented as unsupported.
+- [ ] **Pi JSON stub schema:** Pi file mirrors phone keys with `null` or sentinel + comment "fill on first batch." **Done when:** loader accepts pi file without crash.
+
+---
 
 ## 7. Clarifications required before plan v2
 
-- **Pending (Zbigniew):** Proceed to Phase 4 (HSV stain verification) in parallel while ranking is 13% lungs / 5.3% esophagus, or block Phase 4 until ranking improves? **Who:** Zbigniew. **If not answered:** Plan v2 retains Step 1 as gate; default recommendation is **parallel documentation-only Phase 4 planning** but no HSV implementation until mentor reply.
+- **[Pending]:** Which **exact set IDs** constitute the visual pilot (same 10 as Fix 1c audit, or revised list after set_04-only pass)? **Who:** User (Zeke). **If not answered:** Plan v2 must not claim ≥8/10 acceptance — use placeholder `PILOT_SET_IDS` in constants JSON commented "TBD" and block milestone sign-off.
 
-- **Pending (Lab / Zeke):** Is `set_41` block (WO7842 / HE) genuinely paired with slide (WO7482 / MT), or is one filename wrong? **Who:** User + lab. **If not answered:** Exclude set_41 from TPR denominator in plan v2 with documented assumption; do not treat its ranking as matcher signal.
+- **[Pending]:** Is **≥8/10** judged on wax/ROI framing only, or must tissue silhouette also look match-ready inside the crop? **Who:** User / Zbigniew. **If not answered:** Safe default for plan v2 — **ROI framing only** (label/grid exclusion + paraffin window); tissue quality tracked separately in segmentation audit, not gating Fix 1d closure.
 
-- **Pending (Zbigniew):** If Step 3 geometry calibration still exits 1 on overlap after implementation, is it acceptable to proceed with **documented provisional constants + routing_uncertain flagging** rather than blocking Phase 4 indefinitely? **Who:** Zbigniew. **If not answered:** Plan v2 default is keep Option B xfail, document overlap in calibration notes, and **do not** claim router is calibrated — Phase 4 may start only for stain layer that does not depend on routing branch.
+- **[Pending]:** For **phone** `MARGIN_STRICT_MIN_PERIM_FRAC`, should the value be derived from the existing 47-set `contour_profile.csv` perimeter stats, or from a fresh measurement pass on block silhouettes only? **Who:** User. **If not answered:** Safe default — derive from block `block_silhouette` rows in existing calibration CSV; document percentile used (e.g. p10 bright perimeter) in constants JSON comments.
 
-> **No user clarification required before plan v2.** Steps 3–4 algorithm specs and stale-JSON policy can be written into plan v2 with repo-derived defaults. Mentor items above are **pending decisions** with documented fallbacks, not blockers to revising the spec.
+> **§7 blocks plan v2:** **Partially.** Plan v2 can proceed with safe defaults for margin derivation and ROI-only rubric, but **pilot set ID enumeration** should be confirmed before locking acceptance criteria and geometry-script set lists. Pi hardware constants remain stubbed per plan — not a v2 blocker.

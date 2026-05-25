@@ -30,7 +30,8 @@ import phase3_constellation as p3c
 import phase3_contour_profile as p3cp
 import phase3_label_detection as p3ld
 import phase3_unified_matcher as p3u
-from phase1_segmentation import load_image, segment_tissue
+from phase1_segmentation import load_image
+import phase3_block_roi as p3roi
 
 
 log = logging.getLogger(__name__)
@@ -68,8 +69,9 @@ def _process_image(path: Path, meta: dict[str, Any]) -> Optional[dict[str, Any]]
     if meta.get("label_type") == "yellow":
         img = p3ld.apply_label_mask(img)
 
-    _gray, mask, _otsu = segment_tissue(img)
-    cleaned, contours = p2.clean_mask(mask, p3cp.clean_mask_role(meta))
+    seg = p3roi.segment_with_block_roi(img, meta, p2.clean_mask)
+    cleaned = seg.cleaned_mask
+    contours = seg.contours
     if not contours:
         log.warning("No usable contours after cleaning: %s", path.name)
         return None
@@ -104,6 +106,7 @@ def _process_image(path: Path, meta: dict[str, Any]) -> Optional[dict[str, Any]]
         "signature_meta": sig_meta,
         "image": img,
         "cleaned_mask": cleaned,
+        **p3roi.roi_fields_from_result(seg, meta=meta),
     }
 
 

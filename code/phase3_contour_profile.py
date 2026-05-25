@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import pandas as pd
 
-from phase1_segmentation import segment_tissue
+import phase3_block_roi as p3roi
 from phase2_descriptors import clean_mask
 
 
@@ -167,11 +167,20 @@ def normalize_tissue_class(tissue: str) -> Optional[str]:
     return None
 
 
+def enrich_capture_source(meta: dict[str, Any]) -> None:
+    """Benchmark library images default to phone; Pi batch sets capture_source=pi."""
+    if meta.get("capture_source") in ("phone", "pi"):
+        return
+    meta["capture_source"] = "phone"
+    meta["capture_source_defaulted"] = True
+
+
 def enrich_tissue_fields(meta: dict[str, Any]) -> None:
     """Attach tissue_token, tissue_class (reporting), and label_type (calibration)."""
     raw = meta.get("tissue", "")
     meta["tissue_token"] = normalize_tissue_token(raw)
     meta["tissue_class"] = normalize_tissue_class(raw)
+    enrich_capture_source(meta)
     if meta.get("parse_ok"):
         meta["label_type"] = label_type_from_meta(meta)
 
@@ -520,8 +529,10 @@ def validate_threshold_sanity(
 def measure_contours_on_image(bgr: np.ndarray, meta: dict[str, Any]) -> dict[str, Any]:
     h, w = bgr.shape[:2]
     image_pixels = h * w
-    _, mask, otsu = segment_tissue(bgr)
-    cleaned, contours = clean_mask(mask, clean_mask_role(meta))
+    seg = p3roi.segment_with_block_roi(bgr, meta, clean_mask)
+    cleaned = seg.cleaned_mask
+    contours = seg.contours
+    otsu = seg.otsu_threshold
 
     areas = [float(cv2.contourArea(c)) for c in contours]
     contour_count = len(contours)
@@ -529,7 +540,7 @@ def measure_contours_on_image(bgr: np.ndarray, meta: dict[str, Any]) -> dict[str
     max_frac = max_area / image_pixels if image_pixels else 0.0
     exclusion = measurement_exclusion_reason(contour_count, max_frac)
 
-    tissue_fraction = float((cleaned > 0).sum()) / image_pixels
+    tissue_fraction = p3roi.tissue_fraction_full_image(cleaned)
     dominance = (max_area / float(sum(areas))) if areas else float("nan")
     return {
         "contour_count": contour_count,
@@ -544,6 +555,7 @@ def measure_contours_on_image(bgr: np.ndarray, meta: dict[str, Any]) -> dict[str
         "image_width": w,
         "otsu_threshold": otsu,
         "measurement_exclusion": exclusion,
+        **p3roi.roi_fields_from_result(seg, meta=meta),
     }
 
 
@@ -917,6 +929,42 @@ def run_calibration(input_dir: Path = INPUT_DIR,
         histogram_paths=hist_paths,
         low_n_warnings=low_n,
     )
+    blocks = [
+        r for r in records
+        if r.get("role") == "block_silhouette" and r.get("measured")
+    ]
+    if blocks:
+        ok_n = sum(1 for r in blocks if r.get("roi_detection_ok"))
+        roi_lines = [
+            "",
+            "## Block cassette ROI (Fix 1)",
+            "",
+            "- **`tissue_fraction`:** `(full_mask > 0).sum() / (image_height * image_width)` "
+            "with mask pasted into full-frame coordinates.",
+            "- **Paraffin interior (Fix 1b):** row-projection tallest bright band "
+            f"(row mean ≥ {p3roi.PARAFFIN_ROW_MEAN}) inside frame mask; "
+            "semantic `validate_paraffin_roi()` required for `roi_detection_ok`.",
+            "- **Segmentation:** Otsu on crop; HSV fallback when Otsu mask inadequate.",
+            "- **Signal-gap reporting:** use `roi_detection_ok=True` cohort separately "
+            "from fallback rows when interpreting regenerated gaps.",
+            "",
+            f"- Block silhouettes measured: **{len(blocks)}**",
+            f"- `roi_detection_ok=True`: **{ok_n}** ({100.0 * ok_n / len(blocks):.1f}%)",
+            f"- Fallback (full frame): **{len(blocks) - ok_n}**",
+            "",
+        ]
+        failed_ids = sorted(
+            {
+                f"set_{int(r['set_id']):02d}"
+                for r in blocks
+                if not r.get("roi_detection_ok") and r.get("set_id") is not None
+            },
+        )
+        if failed_ids:
+            roi_lines.append(f"- Fallback set IDs: `{', '.join(failed_ids)}`")
+            roi_lines.append("")
+        with NOTES_PATH.open("a", encoding="utf-8") as fh:
+            fh.write("\n".join(roi_lines))
 
     log.info("Parsed/measured/skipped: %d images, %d measured, %d parse warnings",
              len(image_paths), sum(1 for r in records if r.get("measured")),

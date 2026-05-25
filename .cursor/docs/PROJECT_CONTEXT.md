@@ -1,6 +1,6 @@
 # PROJECT_CONTEXT.md — LJI Histology Block-Check Pipeline
 
-> **Last updated:** 2026-05-24 (Fix 1c design v2 — functional verification focus)
+> **Last updated:** 2026-05-25 (Fix 1d plastic-first block ROI)
 > **Purpose:** Attach this file to every new Cursor chat with `@PROJECT_CONTEXT.md`.
 > It replaces the need to re-explain the project from scratch each session.
 > Update it when a phase closes or a major decision changes.
@@ -21,11 +21,63 @@ to detect mismatches and flag exceptions.
 - Zbigniew — supervisor/mentor at LJI
 - Development environment: Windows 11, Cursor (formerly Claude Code), Python 3.10+
 
-**Final deployment target:** Raspberry Pi 5 (8GB) + Hailo-8L AI Accelerator + Pi HQ Camera
-(12MP IMX477) + 16mm C-mount lens, 300mm working distance (~100mm FOV), mounted on a
-2020 aluminum gallows frame above a flicker-free LED light pad.
+**Final deployment target:** Raspberry Pi 5 (8GB) + Arducam camera module + 16mm C-mount lens,
+300mm working distance (~100mm FOV), on a height-adjustable 2020 aluminum gantry above a
+flicker-free LED light pad. **Hailo-8L** remains a future accelerator option — not on the
+mentor purchase order below.
 
-**Budget:** Under $1,000 total.
+**Budget:** Purchase order subtotal **$440.78** before tax/shipping (2026-05-16 email);
+original project cap under $1,000 total still applies for light pad and any add-ons.
+
+### Hardware BOM — Block Check Purchase Order
+
+**Source:** Email *Block Check Purchase Order* (Zeke → Zbigniew/Kasia, 2026-05-16;
+forwarded to personal Gmail 2026-05-25). Status: proposed for lab purchase — verify
+with mentor what is already on hand (e.g. microSD, gantry).
+
+#### Camera stack — $126.97
+
+| Item | Price (USD) | Vendor / link |
+|------|-------------|---------------|
+| Arducam Raspberry Camera module (HQ-class; sensitivity adapter listing) | $52.99 | [Amazon B09YHN5DBY](https://www.amazon.com/Arducam-Raspberry-Camera-Sensitivity-Adapter/dp/B09YHN5DBY) |
+| 16mm C-mount lens (aperture adjustment) | $65.99 | [Amazon B088H936PV](https://www.amazon.com/Arducam-C-Mount-Raspberry-Aperture-Adjustment/dp/B088H936PV) |
+| 15-pin → 22-pin mini FPC adapter cable (Pi 5 camera) | $7.99 | [Amazon B0CVS264R1](https://www.amazon.com/Flexible-Raspberry-Suitable-Modules-Connecting/dp/B0CVS264R1) |
+
+#### Raspberry Pi stack — $238.82
+
+| Item | Price (USD) | Vendor / link | Notes |
+|------|-------------|---------------|--------|
+| Raspberry Pi 5, 8GB RAM | $175.00 | [PiShop](https://www.pishop.us/product/raspberry-pi-5-8gb/) | |
+| Pi 5 case (black/grey) | $10.95 | [PiShop case](https://www.pishop.us/product/raspberry-pi-case-for-pi-5-black-grey/) | |
+| 27W USB-C power supply (5.1V, 5.0A) | $12.95 | [PiShop PSU](https://www.pishop.us/product/raspberry-pi-27w-usb-c-power-supply-black-us/) | |
+| SanDisk Extreme 64GB microSDXC | $27.99 | [Amazon](http://amazon.com/SANDISK-Extreme-microSD-UHS-I-SDSQXH9-064G-GZ6MA/dp/B0G8LX3JFM) | Only if lab lacks suitable card; Zeke has adapter |
+| Micro HDMI → HDMI adapter | $6.99 | [Amazon B06WWQ7KLV](https://www.amazon.com/UGREEN-Adapter-Ethernet-Compatible-Raspberry/dp/B06WWQ7KLV) | Setup / debug display |
+| HQ camera mounting plate (Pi 4 plate listed; verify Pi 5 fit) | $4.95 | [PiShop mounting plate](https://www.pishop.us/product/raspberry-pi-4-mounting-plate-for-hq-camera/) | |
+
+#### Gantry (2020 aluminum) — $74.98
+
+Optional if not already purchased; Zeke can assemble at school robotics shop. Extrusion
+length can be trimmed after height testing.
+
+| Item | Price (USD) | Vendor / link |
+|------|-------------|---------------|
+| 2020-series aluminum corner bracket kit (L + T) | $34.99 | [VXB](https://vxb.com/products/2020-series-aluminum-corner-bracket-kit-with-l-and) |
+| 4-pack 2020 V-slot extrusion, 400mm black | $39.99 | [VXB](https://vxb.com/products/4-pack-2020-aluminum-extrusion-v-slot-400mm-black) |
+
+#### PO totals
+
+| Group | Subtotal |
+|-------|----------|
+| Camera | $126.97 |
+| Raspberry Pi | $238.82 |
+| Gantry | $74.98 |
+| **Total (pre tax/shipping)** | **$440.78** |
+
+#### Not on this PO (still in system design)
+
+- Hailo-8L AI accelerator (Phase 5+ optional)
+- Flicker-free LED light pad (backlight — lab or separate purchase)
+- Production enclosure / motion-trigger rig software (Phase 5+)
 
 ---
 
@@ -92,8 +144,9 @@ retrieval TPR and a usable verification gate are **not contradictory**.
 - ✅ Option B closeout: `closeout_summary.md`, `ranking_failure_notes.md`; integration structural tests pass; 80% gate **xfail** by design
 - ✅ **Signal gate v2** (2026-05-24): label-keyed gaps, verification metrics, segmentation audit, failure census, fragment probe — see `phase3_outputs/score_separation_report.md`
 - ✅ **Fix 1b — structural cassette ROI** (2026-05-24): 2D paraffin mask + morph close + semantic validation; HSV fallback when Otsu crop fails; **14/47** blocks `roi_detection_ok` (honest, not 100%); audit PNGs in `phase3_outputs/roi_crop_audit/` — set_04 ROI now frames paraffin window
-- 📋 **Fix 1c design v2** (brainstorm, not implemented): layered ROI — detection-based cassette (no primary central-% crop), grid/label on **opposite short ends**, **3** ROI geometry gates with `roi_fail_reason` logging, **Otsu-only** on blocks (reshoot if inadequate; no block HSV), pilot **≥7/10 visual** pass before 47-set regen. Spec: `docs/superpowers/specs/2026-05-24-block-capture-roi-design.md`; decisions: `phase3_outputs/mentor_questions.md`
-- ⏳ Formal cycle: synthesizer → `proposed_plan.md` v1 → pre-mortem → plan v2 → implement Fix 1c
+- ✅ **Fix 1c implemented** (2026-05-25): detection-based cassette, opposite short ends, 3 ROI gates + telemetry, Otsu-only blocks, production `allow_full_frame_fallback=False`.
+- ❌ Fix 1c pilot visual **1/10** (Zeke rubric) — only set_04; audit: `phase3_outputs/fix1d_roi_audit_report.md`
+- ✅ **Fix 1d implemented** (2026-05-25): plastic-first chain (phone: no `backlight_cc`), rows-then-morph paraffin, G4/G5 gates, deferred `ambiguous_orientation`, JSON constants + `calibrate_margin_strict.py`, audit `--analysis-fallback`. **Re-pilot required** (≥8/10 ROI rubric) before 47-set regen; closing Fix 1d ≠ signal-gate / Tier B unlock.
 - ⏳ **Success bar:** functional verification **most of the time** on Pi captures — not mask perfection on full phone library
 - ⏳ Mentor alignment optional; Zeke policy in `mentor_questions.md`
 
@@ -152,7 +205,7 @@ Goals: HSV stain verification, two-phase batch workflow orchestration, exception
 generation, false-positive/false-negative analysis. See Section 10.
 
 ### Phases 5–7 — Hardware Integration ⏳ NOT YET STARTED
-Motion detection, production camera, Pi deployment.
+Motion detection, production camera, Pi deployment. Bill of materials: Section 1 (purchase order).
 
 ---
 
@@ -194,7 +247,7 @@ def match_features_hungarian(descriptors_a: list, descriptors_b: list) -> dict:
 | Stain verification | Deferred to Phase 4 | Secondary failure mode catcher; not core to shape matching. |
 | False-positive safety | System should err toward flagging uncertainty rather than passing a mismatch | A missed mismatch (false negative) is more dangerous than a false alarm in histology. |
 | Block ROI (Fix 1c) | Detection-based cassette; grid/label opposite ends; 3 geometry gates; Otsu-only blocks; geometric inset last resort flagged | Avoid fixed central-% crop and stacked AND gates that reject good frames; HSV weak on unstained silhouettes |
-| Fix 1c pilot gate | ≥7/10 visual audit on named pilot sets vs Fix 1b baseline | Do not use verification/gap to judge ROI pilot; regen 47 only after pilot passes |
+| Fix 1c pilot gate | ≥8/10 visual audit on named pilot sets vs Fix 1b baseline | Do not use verification/gap to judge ROI pilot; regen 47 only after pilot passes |
 
 ---
 
