@@ -21,8 +21,11 @@ This page is a short human index. Cursor agents load the `.mdc` rule automatical
 
 ## Suggested chat shortcuts
 
-- `/plan` — synthesize or refresh the proposed plan
-- `/premortem` — generate pre-mortem from the current plan
-- `/implement` — gate: specs → mitigations → tests → code
+- **`create the plan`** (or **run planning gate**) — one chat orchestrates three steps: v1 here (with brainstorm evidence), then **two fresh subagents** (pre-mortem, then v2) that must not see the brainstorm. Skill: [`.cursor/skills/planning-gate/SKILL.md`](../skills/planning-gate/SKILL.md). Attach `@PROJECT_CONTEXT.md` + audit paths for v1 only.
+- `/plan` — synthesize v1 only (`session-synthesizer`)
+- `/premortem` — critique only (`pre-mortem-critic`)
+- `/implement` — read v2 specs → mitigations → tests → code (after plan v2)
 
-Skills: `~/.cursor/skills/session-synthesizer/` and `~/.cursor/skills/pre-mortem-critic/`.
+**Substantial work only:** trivial edits skip the full gate (see `planning-gate` skill).
+
+Skills: `session-synthesizer`, `pre-mortem-critic`, project `planning-gate`.
