@@ -1,7 +1,7 @@
 group_key,set_id,tissue_class,tissue_token,has_block,has_slide
 set_01,1,lung,lung,True,False
 set_02,2,lung,lungs,True,True
-set_03,3,esophagus,esophagus,True,True
+set_03,3,esophagus,esophagus,False,True
 set_04,4,esophagus,esophagus,True,True
 set_05,5,lung,lungs,True,True
 set_06,6,lung,lungs,True,True
@@ -9,7 +9,7 @@ set_07,7,esophagus,esophagus,True,True
 set_08,8,lung,lungs,True,True
 set_09,9,esophagus,esophagus,True,True
 set_10,10,esophagus,esophagus,True,True
-set_11,11,esophagus,esophagus,True,True
+set_11,11,esophagus,esophagus,False,True
 set_12,12,esophagus,esophagus,True,True
 set_13,13,lung,lungs,True,True
 set_14,14,lung,lungs,True,True
@@ -22,7 +22,7 @@ set_20,20,lung,lungs,True,True
 set_21,21,lung,lung,True,True
 set_22,22,lung,lung,True,True
 set_23,23,esophagus,esophagus,True,True
-set_24,24,esophagus,esophagus,True,True
+set_24,24,esophagus,esophagus,False,True
 set_25,25,esophagus,esophagus,True,True
 set_26,26,esophagus,esophagus,True,True
 set_27,27,esophagus,esophagus,True,True
@@ -39,7 +39,7 @@ set_37,37,lung,lungs,True,True
 set_38,38,lung,lungs,True,True
 set_39,39,lung,lungs,True,True
 set_40,40,esophagus,esophagus,True,True
-set_41,41,esophagus,esophagus,True,True
+set_41,41,esophagus,esophagus,False,True
 set_42,42,esophagus,esophagus,True,True
 set_43,43,esophagus,esophagus,True,True
 set_44,44,esophagus,esophagus,True,True

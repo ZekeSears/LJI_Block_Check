@@ -1,7 +1,7 @@
 {
   "status": "calibrated",
   "calibration_exit": 0,
-  "calibrated_at": "2026-05-24T03:44:05.071256+00:00",
+  "calibrated_at": "2026-05-24T14:30:08.221984+00:00",
   "routing_strategy": "hybrid_geometry",
   "derivation": "geometry_k2",
   "SLIDE_TOTAL_TISSUE_AREA_PX": 208044.125,
