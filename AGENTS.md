@@ -27,3 +27,34 @@ Rule: `.cursor/rules/lji-obsidian-brain.mdc` (always on). Human index in vault: 
 **Living doc:** After each phase milestone, update `.cursor/docs/PROJECT_CONTEXT.md` Sections 4 and 10 (and the “Last updated” date).
 
 **Quick commands**: `pytest tests/` · `python -m flake8 code/`
+
+## Cursor Cloud specific instructions
+
+This repo is a **batch Python CV pipeline** (no web server, Docker, or `docker compose`). Standard commands are in `.cursor/rules/lji-conventions.mdc` and `CLAUDE.md`.
+
+### Dependencies
+
+- **Python 3.10+** with `pip install -r requirements.txt` (OpenCV, NumPy, SciPy, pandas, pytest, barcode libs).
+- Optional **venv** at `venv/`: `code/project_runtime.py` re-execs into it when present; Cloud VMs can use system Python + `~/.local` installs instead.
+- **`iphone_images/`** JPEG library is **gitignored**. Default `pytest tests/` uses synthetic fixtures only; two tests fail without real JPEGs (`test_set04_golden_bbox`, `test_list_jpeg_paths_includes_uppercase_extension`). Full CV E2E needs populated `iphone_images/` per `iphone_images/README.md`.
+- **System barcode libs** (`libdmtx`, `libzbar`) are optional for most unit tests; run `python code/phase35_setup_check.py` to verify. Linux: `sudo apt install libdmtx0b libzbar0`.
+
+### Lint and tests
+
+| Command | Notes |
+|---------|--------|
+| `python3 -m flake8 code/` | Often exits **1** due to many pre-existing E501 line-length warnings; still the project lint entrypoint. |
+| `pytest tests/` | Default suite; `pytest.ini` ignores `tests/integration/`. Expect **~179 passed**, **2 failed** without `iphone_images/`. |
+| `pytest tests/ tests/integration/ -v` | Full integration; skips when no iPhone JPEGs. |
+
+### Running the application
+
+There is no long-running service. Main batch entry points:
+
+- `python code/phase3_pipeline.py` or `python run_phase3_pipeline.py` — cross-modal matching (requires `iphone_images/`).
+- `python generate_test_images.py` — synthetic `test_images/` for offline demos.
+- `python test_real_images.py` — legacy matcher smoke test (needs `test_images/real/` BIRL JPEGs).
+
+**Quick hello-world without iPhone photos:** `python generate_test_images.py`, then run `shape_matcher.run_comparison` on `test_images/realistic_0_block.png` vs `test_images/realistic_0_slide_HE.png` (MATCH) vs a `wrong_*` pair (REJECT).
+
+Committed artifacts under `phase3_outputs/pipeline_run/` let some integration tests run without re-running the pipeline.
